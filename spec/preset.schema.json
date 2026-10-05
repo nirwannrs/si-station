@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aigame/preset.schema.json",
+  "title": "AIGame Preset",
+  "description": "A .preset.json file. Controls sampling and how the prompt is assembled. Editable in both the creator and the game.",
+  "type": "object",
+  "required": ["spec", "spec_version", "name", "blocks"],
+  "additionalProperties": false,
+  "properties": {
+    "spec": { "const": "aigame-preset" },
+    "spec_version": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "sampling": {
+      "description": "Omitted values are not sent, so the provider default applies.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "top_p": { "type": "number", "minimum": 0, "maximum": 1 },
+        "top_k": { "type": "integer", "minimum": 0 },
+        "frequency_penalty": { "type": "number" },
+        "presence_penalty": { "type": "number" },
+        "max_tokens": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_context_tokens": { "type": "integer", "minimum": 1024 },
+        "summarize_after_turns": { "type": "integer", "minimum": 0, "description": "Turns older than this are folded into the running summary. 0 disables." }
+      }
+    },
+    "suggestions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "count": { "type": "integer", "minimum": 1, "maximum": 6, "default": 3 }
+      }
+    },
+    "blocks": {
+      "description": "Prompt is built top to bottom from enabled blocks, with one rule that overrides the order: the slots that change every turn (lorebook, state, quests) are always sent with the newest message, after the history. That keeps the start of the prompt identical from turn to turn, which is what lets providers cache it. Text blocks placed below the history slot are sent there too.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "name": { "type": "string", "description": "Label shown next to the toggle." },
+          "help": { "type": "string", "description": "One-line explanation shown in simple mode." },
+          "enabled": { "type": "boolean", "default": true },
+          "kind": {
+            "enum": ["text", "slot"],
+            "description": "text: author-written content. slot: filled by the engine from the card and save."
+          },
+          "role": { "enum": ["system", "user", "assistant"], "default": "system" },
+          "content": { "type": "string", "description": "For text blocks. Supports {{user}} and {{currency}}." },
+          "slot": {
+            "enum": ["world", "narrator_instructions", "persona", "characters", "lorebook", "state", "quests", "summary", "history", "action_protocol"],
+            "description": "For slot blocks. action_protocol is required for game mechanics and cannot be disabled."
+          },
+          "simple": { "type": "boolean", "default": false, "description": "Show this toggle in simple mode." }
+        },
+        "allOf": [
+          { "if": { "properties": { "kind": { "const": "text" } } }, "then": { "required": ["content"] } },
+          { "if": { "properties": { "kind": { "const": "slot" } } }, "then": { "required": ["slot"] } }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aigame/settings.schema.json",
+  "title": "AIGame LLM Settings",
+  "description": "Device-local LLM setup. Never stored in cards, presets, or saves, because it holds API keys.",
+  "type": "object",
+  "required": ["connections", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "connections": {
+      "description": "Saved provider logins. A model slot points at one of these.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "provider"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "name": { "type": "string" },
+          "provider": {
+            "enum": ["anthropic", "openrouter", "nanogpt", "custom", "local"],
+            "description": "anthropic uses the Messages API. All others use OpenAI-compatible chat completions; the provider only pre-fills base_url."
+          },
+          "base_url": { "type": "string", "description": "Required for custom and local." },
+          "api_key": { "type": "string" }
+        },
+        "if": { "properties": { "provider": { "enum": ["custom", "local"] } } },
+        "then": { "required": ["base_url"] }
+      }
+    },
+    "models": {
+      "type": "object",
+      "required": ["main"],
+      "additionalProperties": false,
+      "properties": {
+        "main": { "$ref": "#/$defs/model_slot", "description": "Writes the narration. Uses the active preset." },
+        "utility": { "$ref": "#/$defs/model_slot", "description": "Optional second model for small jobs. When unset, every task runs on main." }
+      }
+    },
+    "tasks": {
+      "description": "Which slot handles each helper job. Ignored when models.utility is unset. The list is open: the engine adds new helper jobs (e.g. scene direction) over time, and any job not listed here runs on utility.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/slot_name" },
+      "properties": {
+        "resolve_actions": { "$ref": "#/$defs/slot_name", "description": "Turn player free text into actions before narration." },
+        "suggest_choices": { "$ref": "#/$defs/slot_name", "description": "Generate the suggested replies." },
+        "summarize": { "$ref": "#/$defs/slot_name", "description": "Fold old turns into the running summary." }
+      }
+    }
+  },
+  "$defs": {
+    "slot_name": { "enum": ["main", "utility"], "default": "utility" },
+    "model_slot": {
+      "type": "object",
+      "required": ["connection", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "connection": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "enabled": { "type": "boolean", "default": true, "description": "Only meaningful on utility: lets the player switch it off without losing what they entered." },
+        "model": { "type": "string", "description": "Model id as the provider names it." }
+      }
+    }
+  }
+}

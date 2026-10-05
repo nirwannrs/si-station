@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aigame/card.schema.json",
+  "title": "AIGame Card",
+  "description": "card.json at the root of a card (a .sicard file, or a folder while it is being made). Asset paths are relative to that root (e.g. assets/sprites/mira/happy.png). Cards are data only: no scripts.",
+  "type": "object",
+  "required": ["spec", "spec_version", "meta", "world", "rules", "characters"],
+  "additionalProperties": false,
+  "properties": {
+    "spec": { "const": "aigame-card" },
+    "spec_version": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+    "meta": {
+      "type": "object",
+      "required": ["id", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "version": { "type": "string" },
+        "description": { "type": "string", "description": "Shown to players in the card library. Not sent to the LLM." },
+        "creator_note": { "type": "string", "description": "A note from the creator to players, shown on the Card info screen. Not sent to the LLM." },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "cover": { "$ref": "#/$defs/asset" }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": ["visual", "text"],
+          "default": "visual",
+          "description": "visual: backgrounds, sprites and a text box, using the card's assets. text: no assets, the story as a scrolling text log."
+        }
+      }
+    },
+    "world": {
+      "type": "object",
+      "required": ["description", "opening"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string", "description": "Setting and tone. Always in context." },
+        "scenario": { "type": "string", "description": "The current situation at game start." },
+        "opening": { "type": "string", "description": "First narration shown to the player. Supports {{user}}." },
+        "narrator_instructions": { "type": "string", "description": "Card-specific guidance for the narrator, layered on top of the preset." },
+        "start_location": { "$ref": "#/$defs/id" }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "required": ["stats"],
+      "additionalProperties": false,
+      "properties": {
+        "stats": {
+          "description": "Stats every character and the persona have. The engine treats them generically.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "default"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "min": { "type": "number", "default": 0 },
+              "max": { "type": "number" },
+              "default": { "type": "number" }
+            }
+          }
+        },
+        "features": {
+          "description": "Switches for the optional systems. A system that is off is not tracked, not shown and never mentioned to the model. Stats, quests, shops and the map need no switch: they exist when the card defines any.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inventory": { "type": "boolean", "default": true },
+            "equipment": { "type": "boolean", "default": true, "description": "Needs inventory." },
+            "money": { "type": "boolean", "default": true, "description": "Shops need both money and inventory." },
+            "levels": { "type": "boolean", "default": false },
+            "skills": { "type": "boolean", "default": false },
+            "relationships": { "type": "boolean", "default": false },
+            "states": { "type": "boolean", "default": false, "description": "Conditions a character can be in, such as asleep, restrained or away. Four are built in; the card can add more in states." }
+          }
+        },
+        "leveling": {
+          "description": "Used when levels are on. The narrator awards experience; the engine does the rest.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "xp_per_level": { "type": "number", "exclusiveMinimum": 0, "default": 100, "description": "Experience to finish level N is this times N." },
+            "gains": { "type": "object", "additionalProperties": { "type": "number" }, "description": "Stat id -> amount added on each level up. A stat with a max has its max raised too." }
+          }
+        },
+        "battle": {
+          "description": "How fights work. free: the story tells them and the engine only enforces costs, damage and rewards. system: the game runs them turn by turn on a battle screen.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["free", "system"], "default": "free" },
+            "health_stat": { "$ref": "#/$defs/id", "description": "Required for system. The stat that is health: at zero a fighter is out." },
+            "attack_stat": { "$ref": "#/$defs/id", "description": "Added to the damage of a plain attack." },
+            "defense_stat": { "$ref": "#/$defs/id", "description": "Taken off the damage of a plain attack against its owner." },
+            "basic_damage": { "type": "number", "minimum": 0, "default": 2, "description": "Damage of a plain attack before attack and defense. An attack never does less than 1." },
+            "on_defeat": {
+              "description": "What happens when the player's health reaches zero in a fight.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": { "enum": ["survive", "game_over"], "default": "survive" },
+                "health": { "type": "number", "minimum": 1, "default": 1, "description": "survive: health the player comes round with." },
+                "location": { "$ref": "#/$defs/id", "description": "survive: where the player comes round. Omit to stay put." }
+              }
+            }
+          },
+          "if": { "properties": { "mode": { "const": "system" } }, "required": ["mode"] },
+          "then": { "required": ["health_stat"] }
+        },
+        "relationship_name": { "type": "string", "default": "Affection", "description": "What the 0 to 100 value each character holds toward the player is called." },
+        "currency_name": { "type": "string", "default": "Gold" },
+        "allow_generated_items": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true the narrator may introduce items not defined in the card (misc type, no effects). If false only card items can exist."
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "type": { "enum": ["consumable", "equipment", "key", "misc"] },
+          "slot": { "$ref": "#/$defs/slot", "description": "Required when type is equipment." },
+          "stackable": { "type": "boolean", "default": true },
+          "value": { "type": "number", "minimum": 0, "description": "Base price in currency." },
+          "effects": {
+            "description": "Consumable: applied once on use. Equipment: applied while equipped.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["stat", "amount"],
+              "additionalProperties": false,
+              "properties": {
+                "stat": { "$ref": "#/$defs/id" },
+                "amount": { "type": "number" }
+              }
+            }
+          },
+          "icon": { "$ref": "#/$defs/asset" }
+        },
+        "if": { "properties": { "type": { "const": "equipment" } } },
+        "then": { "required": ["slot"] }
+      }
+    },
+    "skills": {
+      "description": "Used when skills are on. Characters and the persona list the ones they have in their start.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "target": { "enum": ["self", "other"], "default": "other" },
+          "cost": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0 }, "description": "Stat id -> amount spent by the user, e.g. mana." },
+          "effects": {
+            "description": "Applied to the target. A negative amount is damage.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["stat", "amount"],
+              "additionalProperties": false,
+              "properties": { "stat": { "$ref": "#/$defs/id" }, "amount": { "type": "number" } }
+            }
+          }
+        }
+      }
+    },
+    "states": {
+      "description": "Used when states are on. Adds to the built-in states (asleep, unconscious, restrained, away); an entry with a built-in id replaces it. The narrator may also put characters in states that are not listed, which are remembered but stop nothing.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "description": { "type": "string", "description": "What it means, for the narrator." },
+          "blocks": {
+            "description": "What a character in this state cannot do. For the player the engine enforces it.",
+            "type": "array",
+            "items": { "enum": ["all", "move", "items", "equipment", "skills", "trade", "attack"] }
+          },
+          "away": { "type": "boolean", "default": false, "description": "The character is out of the scene: not shown, and cannot be given things or targeted." }
+        }
+      }
+    },
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "description": { "type": "string", "description": "Who they are, background, role in the story." },
+          "personality": { "type": "string" },
+          "appearance": { "type": "string", "description": "Physical look. Also the base prompt for sprite generation in the creator." },
+          "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "Colour of the character's name when they speak." },
+          "dialogue_examples": { "type": "string" },
+          "location": { "$ref": "#/$defs/id", "description": "Omit for a character kept off the map until the story or a fight brings them in." },
+          "xp_reward": { "type": "number", "minimum": 0, "description": "Experience the player gets for beating this character in a system fight." },
+          "sprites": {
+            "description": "Expression name -> image. 'neutral' is the fallback.",
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/asset" }
+          },
+          "start": { "$ref": "#/$defs/loadout" }
+        }
+      }
+    },
+    "default_persona": {
+      "description": "Pre-filled player persona. The player can edit name/description/appearance in game; start values apply unless the player has none.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "appearance": { "type": "string" },
+        "start": { "$ref": "#/$defs/loadout" }
+      }
+    },
+    "locations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "background": { "$ref": "#/$defs/asset" },
+          "connections": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+        }
+      }
+    },
+    "shops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "stock"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "location": { "$ref": "#/$defs/id" },
+          "keeper": { "$ref": "#/$defs/id", "description": "Character id of the shopkeeper." },
+          "stock": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["item"],
+              "additionalProperties": false,
+              "properties": {
+                "item": { "$ref": "#/$defs/id" },
+                "price": { "type": "number", "minimum": 0, "description": "Overrides the item's value." },
+                "qty": { "type": "integer", "minimum": 0, "description": "Omit for unlimited." }
+              }
+            }
+          }
+        }
+      }
+    },
+    "quests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "stages"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "auto_start": { "type": "boolean", "default": false },
+          "fail_when": { "type": "string", "description": "Narrator-only: what makes the quest fail, for example the player leaving before it is done." },
+          "stages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["id", "description"],
+              "additionalProperties": false,
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "description": { "type": "string", "description": "Objective text shown in the quest log." },
+                "hint": { "type": "string", "description": "Narrator-only: how this stage gets completed." }
+              }
+            }
+          },
+          "rewards": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "money": { "type": "number" },
+              "items": { "$ref": "#/$defs/item_stacks" },
+              "stats": { "type": "object", "additionalProperties": { "type": "number" } }
+            }
+          }
+        }
+      }
+    },
+    "lorebook": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "keys": { "type": "array", "items": { "type": "string" }, "description": "Entry is injected when any key appears in recent turns." },
+          "content": { "type": "string" },
+          "always_on": { "type": "boolean", "default": false },
+          "priority": { "type": "integer", "default": 0, "description": "Higher survives longer when context is tight." }
+        }
+      }
+    },
+    "recommended_preset": { "$ref": "#/$defs/asset", "description": "Path to a .preset.json bundled in the card. The player may override it." }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "asset": { "type": "string", "pattern": "^[^/\\\\][^\\\\]*$", "description": "Relative path inside the card." },
+    "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] },
+    "item_stacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["item"],
+        "additionalProperties": false,
+        "properties": {
+          "item": { "$ref": "#/$defs/id" },
+          "qty": { "type": "integer", "minimum": 1, "default": 1 }
+        }
+      }
+    },
+    "loadout": {
+      "description": "Starting state. The engine copies this into the save and adjusts it from then on.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stats": { "type": "object", "additionalProperties": { "type": "number" }, "description": "Stat id -> starting value. Missing stats use the rule default." },
+        "money": { "type": "number", "minimum": 0 },
+        "level": { "type": "integer", "minimum": 1, "default": 1 },
+        "states": {
+          "description": "States they are in when the game starts.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["state"],
+            "additionalProperties": false,
+            "properties": {
+              "state": { "$ref": "#/$defs/id" },
+              "note": { "type": "string", "description": "How or why, in a few words." }
+            }
+          }
+        },
+        "relationship": { "type": "number", "minimum": 0, "maximum": 100, "default": 0, "description": "Characters only: how they feel about the player at the start." },
+        "known": { "type": "boolean", "default": true, "description": "Characters only: whether the player already knows them when the game starts. A stranger is left out of the player's People list until the story has them speak or join the player." },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["skill"],
+            "additionalProperties": false,
+            "properties": {
+              "skill": { "$ref": "#/$defs/id" },
+              "locked": { "type": "boolean", "default": false, "description": "Known about but not usable until unlocked by the story or by level." },
+              "unlock_level": { "type": "integer", "minimum": 2, "description": "Unlocks by itself on reaching this level." }
+            }
+          }
+        },
+        "inventory": { "$ref": "#/$defs/item_stacks" },
+        "equipment": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/slot" },
+          "additionalProperties": { "$ref": "#/$defs/id" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "spec": "aigame-preset",
+  "spec_version": "0.1",
+  "name": "Default",
+  "description": "Balanced narration, second person, medium length.",
+  "sampling": {
+    "temperature": 0.9,
+    "max_tokens": 600
+  },
+  "context": {
+    "max_context_tokens": 16000,
+    "summarize_after_turns": 20
+  },
+  "suggestions": {
+    "enabled": true,
+    "count": 3
+  },
+  "blocks": [
+    {
+      "id": "main",
+      "name": "Narrator role",
+      "kind": "text",
+      "content": "You are the narrator of an interactive story. Describe the world and voice every character except {{user}}. Never decide {{user}}'s actions, words, or feelings."
+    },
+    {
+      "id": "style_second_person",
+      "name": "Second person",
+      "help": "Narrate as \"you\" instead of by name.",
+      "kind": "text",
+      "content": "Write in second person, present tense.",
+      "simple": true
+    },
+    {
+      "id": "style_short",
+      "name": "Short replies",
+      "help": "One or two paragraphs per turn.",
+      "kind": "text",
+      "content": "Keep each reply to one or two short paragraphs.",
+      "enabled": false,
+      "simple": true
+    },
+    {
+      "id": "style_proactive",
+      "name": "Proactive world",
+      "help": "Characters act on their own goals instead of waiting for you.",
+      "kind": "text",
+      "content": "Characters pursue their own goals and may act without being prompted. Let events move forward.",
+      "simple": true
+    },
+    {
+      "id": "world",
+      "name": "World",
+      "kind": "slot",
+      "slot": "world"
+    },
+    {
+      "id": "narrator_instructions",
+      "name": "Card instructions",
+      "kind": "slot",
+      "slot": "narrator_instructions"
+    },
+    {
+      "id": "persona",
+      "name": "Player persona",
+      "kind": "slot",
+      "slot": "persona"
+    },
+    {
+      "id": "characters",
+      "name": "Characters present",
+      "kind": "slot",
+      "slot": "characters"
+    },
+    {
+      "id": "action_protocol",
+      "name": "Game mechanics",
+      "kind": "slot",
+      "slot": "action_protocol"
+    },
+    {
+      "id": "summary",
+      "name": "Story so far",
+      "kind": "slot",
+      "slot": "summary"
+    },
+    {
+      "id": "history",
+      "name": "Recent turns",
+      "kind": "slot",
+      "slot": "history"
+    },
+    {
+      "id": "lorebook",
+      "name": "Lorebook",
+      "kind": "slot",
+      "slot": "lorebook"
+    },
+    {
+      "id": "state",
+      "name": "Inventory and stats",
+      "kind": "slot",
+      "slot": "state"
+    },
+    {
+      "id": "quests",
+      "name": "Active quests",
+      "kind": "slot",
+      "slot": "quests"
+    }
+  ]
+}

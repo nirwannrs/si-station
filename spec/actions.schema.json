@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aigame/actions.schema.json",
+  "title": "AIGame Action List",
+  "description": "What the LLM returns to change game state. Used twice per turn: (1) the resolver turns player text into actions before narration, (2) the narrator may append world-driven actions after narration. The engine validates every action against the card and save; rejected actions are returned with a reason and never applied. 'who' is 'player' or a character id.",
+  "type": "object",
+  "required": ["actions"],
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "description": "Consume or use an item from who's inventory. Fails if not held.",
+            "type": "object",
+            "required": ["type", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "use_item" },
+              "who": { "$ref": "#/$defs/who" },
+              "item": { "$ref": "#/$defs/id" },
+              "target": { "$ref": "#/$defs/who", "description": "Who receives the effects. Defaults to who." }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "equip" },
+              "who": { "$ref": "#/$defs/who" },
+              "item": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "slot"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "unequip" },
+              "who": { "$ref": "#/$defs/who" },
+              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] }
+            }
+          },
+          {
+            "description": "Move items between two holders. Fails if from does not hold enough.",
+            "type": "object",
+            "required": ["type", "item", "from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "transfer_item" },
+              "item": { "$ref": "#/$defs/id" },
+              "qty": { "$ref": "#/$defs/qty" },
+              "from": { "$ref": "#/$defs/who" },
+              "to": { "$ref": "#/$defs/who" }
+            }
+          },
+          {
+            "description": "Item enters the game from the world (found, looted, rewarded).",
+            "type": "object",
+            "required": ["type", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "add_item" },
+              "who": { "$ref": "#/$defs/who" },
+              "item": { "$ref": "#/$defs/id" },
+              "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "description": "Item leaves the game (lost, destroyed, dropped).",
+            "type": "object",
+            "required": ["type", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "remove_item" },
+              "who": { "$ref": "#/$defs/who" },
+              "item": { "$ref": "#/$defs/id" },
+              "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "description": "Only valid when rules.allow_generated_items is true. Creates a misc item with no effects and gives it to who.",
+            "type": "object",
+            "required": ["type", "name"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "create_item" },
+              "who": { "$ref": "#/$defs/who" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "description": "Player buys from a shop. Fails on insufficient money, missing stock, or wrong location.",
+            "type": "object",
+            "required": ["type", "shop", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "buy" },
+              "shop": { "$ref": "#/$defs/id" },
+              "item": { "$ref": "#/$defs/id" },
+              "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "shop", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "sell" },
+              "shop": { "$ref": "#/$defs/id" },
+              "item": { "$ref": "#/$defs/id" },
+              "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "description": "Money gained or lost outside a shop. Fails if it would go below zero.",
+            "type": "object",
+            "required": ["type", "amount"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_money" },
+              "who": { "$ref": "#/$defs/who" },
+              "amount": { "type": "number" }
+            }
+          },
+          {
+            "description": "Relative change, clamped to the stat's min/max.",
+            "type": "object",
+            "required": ["type", "stat", "amount"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_stat" },
+              "who": { "$ref": "#/$defs/who" },
+              "stat": { "$ref": "#/$defs/id" },
+              "amount": { "type": "number" }
+            }
+          },
+          {
+            "description": "Fails if the location is not connected to who's current one.",
+            "type": "object",
+            "required": ["type", "location"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "move" },
+              "who": { "$ref": "#/$defs/who" },
+              "location": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "quest_start" },
+              "quest": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "description": "Completes the current stage. Completing the last stage finishes the quest and grants rewards.",
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "quest_advance" },
+              "quest": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "quest_fail" },
+              "quest": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "description": "Narrator only. The engine handles levelling up, stat gains and skills that unlock by level.",
+            "type": "object",
+            "required": ["type", "amount"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "gain_xp" },
+              "who": { "$ref": "#/$defs/who" },
+              "amount": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          {
+            "description": "Fails if the skill is not known, is locked, or its cost cannot be paid. target is left out for self-targeted skills.",
+            "type": "object",
+            "required": ["type", "skill"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "use_skill" },
+              "who": { "$ref": "#/$defs/who" },
+              "skill": { "$ref": "#/$defs/id" },
+              "target": { "$ref": "#/$defs/who" }
+            }
+          },
+          {
+            "description": "Narrator only.",
+            "type": "object",
+            "required": ["type", "skill"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "unlock_skill" },
+              "who": { "$ref": "#/$defs/who" },
+              "skill": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
+            "description": "Only for cards whose battle mode is system. Starts a turn-based fight with characters who are where the player is, or who are off the map.",
+            "type": "object",
+            "required": ["type", "enemies"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "start_battle" },
+              "enemies": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/who" } }
+            }
+          },
+          {
+            "description": "Narrator only. Closes the map to the player until unlock_travel. The narrator can still move them.",
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "lock_travel" },
+              "reason": { "type": "string", "description": "One short sentence, shown to the player." }
+            }
+          },
+          {
+            "description": "Narrator only.",
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": { "type": { "const": "unlock_travel" } }
+          },
+          {
+            "description": "Narrator only. Puts someone in a state. A state the card does not define is remembered but stops nothing.",
+            "type": "object",
+            "required": ["type", "state"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "set_state" },
+              "who": { "$ref": "#/$defs/who" },
+              "state": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          },
+          {
+            "description": "Narrator only.",
+            "type": "object",
+            "required": ["type", "state"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "clear_state" },
+              "who": { "$ref": "#/$defs/who" },
+              "state": { "type": "string" }
+            }
+          },
+          {
+            "description": "Narrator only. who is a character, never the player. The value stays within 0 to 100.",
+            "type": "object",
+            "required": ["type", "who", "amount"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_relationship" },
+              "who": { "$ref": "#/$defs/who" },
+              "amount": { "type": "number" }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "who": { "type": "string", "pattern": "^[a-z0-9_]+$", "default": "player" },
+    "qty": { "type": "integer", "minimum": 1, "default": 1 }
+  }
+}

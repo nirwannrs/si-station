@@ -1,0 +1,418 @@
+{
+  "spec": "aigame-card",
+  "spec_version": "0.1",
+  "meta": {
+    "id": "rusty_lantern",
+    "title": "The Rusty Lantern",
+    "author": "aigame",
+    "version": "0.1.0",
+    "description": "A small fantasy starter: a roadside inn, a missing courier, and a cellar nobody wants to talk about.",
+    "tags": [
+      "fantasy",
+      "mystery",
+      "starter"
+    ],
+    "cover": "assets/cover.jpg",
+    "creator_note": "This is the sample card that ships with SI-Station. It is short on purpose: one inn, two people, one secret.\n\nTry things the buttons do not offer. Ask Tobin about the grey mare, or offer Mira coin for the cellar key and see whether she takes it."
+  },
+  "world": {
+    "description": "Low fantasy. The village of Harrow's Rest sits on a trade road through marshland. Magic is rare and distrusted. Tone is grounded and a little wry.",
+    "scenario": "{{user}} arrives at the Rusty Lantern inn at dusk, travel-worn and short on coin. A courier who was due two days ago has not shown up.",
+    "opening": "Rain follows you through the door of the Rusty Lantern. The common room smells of peat smoke and onions. Behind the bar, a broad woman looks up from a ledger, takes in your muddy boots, and sets down her quill.\n\n\"Room's four gold, stew's one. And before you ask, no, the courier hasn't come.\"",
+    "narrator_instructions": "Keep scenes in and around the inn until the player chooses to leave. Mira never volunteers what is in the cellar. The marsh bandit turns up only once the player holds the sealed letter or goes looking for the courier outside.",
+    "start_location": "common_room"
+  },
+  "rules": {
+    "stats": [
+      {
+        "id": "hp",
+        "name": "Health",
+        "min": 0,
+        "max": 20,
+        "default": 20
+      },
+      {
+        "id": "stamina",
+        "name": "Stamina",
+        "min": 0,
+        "max": 10,
+        "default": 10
+      },
+      {
+        "id": "mana",
+        "name": "Mana",
+        "min": 0,
+        "max": 10,
+        "default": 10
+      },
+      {
+        "id": "defense",
+        "name": "Defense",
+        "min": 0,
+        "default": 0
+      }
+    ],
+    "currency_name": "Gold",
+    "allow_generated_items": true,
+    "features": {
+      "levels": true,
+      "skills": true,
+      "relationships": true,
+      "states": true
+    },
+    "leveling": {
+      "xp_per_level": 50,
+      "gains": {
+        "hp": 5,
+        "mana": 2
+      }
+    },
+    "relationship_name": "Trust",
+    "battle": {
+      "mode": "system",
+      "health_stat": "hp",
+      "defense_stat": "defense",
+      "basic_damage": 3,
+      "on_defeat": {
+        "type": "survive",
+        "health": 1,
+        "location": "common_room"
+      }
+    }
+  },
+  "items": [
+    {
+      "id": "stew",
+      "name": "Bowl of Stew",
+      "description": "Thick, hot, mostly onion.",
+      "type": "consumable",
+      "value": 1,
+      "effects": [
+        {
+          "stat": "stamina",
+          "amount": 4
+        }
+      ]
+    },
+    {
+      "id": "healing_draught",
+      "name": "Healing Draught",
+      "description": "Bitter green tonic in a stoppered vial.",
+      "type": "consumable",
+      "value": 8,
+      "effects": [
+        {
+          "stat": "hp",
+          "amount": 8
+        }
+      ]
+    },
+    {
+      "id": "travel_cloak",
+      "name": "Travel Cloak",
+      "description": "Waxed wool, patched at the hem.",
+      "type": "equipment",
+      "slot": "body",
+      "stackable": false,
+      "value": 5,
+      "effects": [
+        {
+          "stat": "defense",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "belt_knife",
+      "name": "Belt Knife",
+      "description": "More tool than weapon.",
+      "type": "equipment",
+      "slot": "weapon",
+      "stackable": false,
+      "value": 3
+    },
+    {
+      "id": "cellar_key",
+      "name": "Cellar Key",
+      "description": "A heavy iron key on a leather thong.",
+      "type": "key",
+      "stackable": false
+    },
+    {
+      "id": "sealed_letter",
+      "name": "Sealed Letter",
+      "description": "Addressed to the innkeeper. The wax is cracked but unbroken.",
+      "type": "key",
+      "stackable": false
+    }
+  ],
+  "skills": [
+    {
+      "id": "quick_strike",
+      "name": "Quick Strike",
+      "description": "A fast blow with whatever is in hand.",
+      "target": "other",
+      "cost": {
+        "stamina": 2
+      },
+      "effects": [
+        {
+          "stat": "hp",
+          "amount": -4
+        }
+      ]
+    },
+    {
+      "id": "field_dressing",
+      "name": "Field Dressing",
+      "description": "Bind a wound and catch your breath.",
+      "target": "self",
+      "cost": {
+        "stamina": 3
+      },
+      "effects": [
+        {
+          "stat": "hp",
+          "amount": 5
+        }
+      ]
+    },
+    {
+      "id": "marsh_light",
+      "name": "Marsh Light",
+      "description": "A blinding flicker of cold fire. Few people can do this, and fewer admit it.",
+      "target": "other",
+      "cost": {
+        "mana": 4
+      },
+      "effects": [
+        {
+          "stat": "hp",
+          "amount": -8
+        }
+      ]
+    }
+  ],
+  "characters": [
+    {
+      "id": "mira",
+      "name": "Mira Oakhand",
+      "description": "Innkeeper of the Rusty Lantern for twenty years. Knows everyone on the road and owes money to half of them.",
+      "personality": "Blunt, dry-humoured, protective of her regulars. Warms up to people who pay and don't pry.",
+      "appearance": "Broad-shouldered woman in her fifties, grey-streaked brown hair in a braid, rolled sleeves, flour-dusted apron.",
+      "dialogue_examples": "\"You can have opinions or you can have supper. Pick.\"",
+      "location": "common_room",
+      "start": {
+        "money": 40,
+        "inventory": [
+          {
+            "item": "cellar_key"
+          }
+        ],
+        "skills": [
+          {
+            "skill": "quick_strike"
+          }
+        ],
+        "relationship": 20
+      },
+      "color": "#e0a070",
+      "sprites": {
+        "neutral": "assets/sprites/mira/neutral.png",
+        "happy": "assets/sprites/mira/happy.png",
+        "angry": "assets/sprites/mira/angry.png",
+        "worried": "assets/sprites/mira/worried.png"
+      }
+    },
+    {
+      "id": "tobin",
+      "name": "Tobin",
+      "description": "Stable boy, about fourteen. Saw the courier's horse come back without a rider and has told no one.",
+      "personality": "Nervous, eager to please, terrible liar.",
+      "appearance": "Skinny boy with straw in his hair, oversized coat, mud to the knees.",
+      "location": "stable",
+      "start": {
+        "stats": {
+          "hp": 10
+        },
+        "inventory": [
+          {
+            "item": "sealed_letter"
+          }
+        ],
+        "relationship": 40
+      },
+      "color": "#a8d08d",
+      "sprites": {
+        "neutral": "assets/sprites/tobin/neutral.png",
+        "happy": "assets/sprites/tobin/happy.png",
+        "angry": "assets/sprites/tobin/angry.png",
+        "worried": "assets/sprites/tobin/worried.png"
+      }
+    },
+    {
+      "id": "marsh_bandit",
+      "name": "Marsh Bandit",
+      "color": "#c06060",
+      "description": "A lean cutthroat in a mud-caked coat, sent to make sure the courier's letter never reaches the inn. Not in the scene until the story brings him in.",
+      "personality": "Patient, mocking, a coward once he is losing.",
+      "appearance": "Wiry man, hood up, a lantern hooked at his belt, a long knife.",
+      "xp_reward": 30,
+      "start": {
+        "stats": {
+          "hp": 12
+        },
+        "money": 5,
+        "skills": [
+          {
+            "skill": "quick_strike"
+          }
+        ]
+      }
+    }
+  ],
+  "default_persona": {
+    "name": "Traveler",
+    "description": "A wanderer looking for work and a dry bed.",
+    "start": {
+      "stats": {
+        "stamina": 5
+      },
+      "money": 6,
+      "inventory": [
+        {
+          "item": "healing_draught"
+        },
+        {
+          "item": "belt_knife"
+        }
+      ],
+      "equipment": {
+        "body": "travel_cloak"
+      },
+      "skills": [
+        {
+          "skill": "quick_strike"
+        },
+        {
+          "skill": "field_dressing"
+        },
+        {
+          "skill": "marsh_light",
+          "locked": true,
+          "unlock_level": 2
+        }
+      ]
+    }
+  },
+  "locations": [
+    {
+      "id": "common_room",
+      "name": "Common Room",
+      "description": "Low beams, a long bar, a peat fire. Stairs lead up to the rooms; a locked door leads down.",
+      "connections": [
+        "stable",
+        "cellar"
+      ],
+      "background": "assets/bg/common_room.jpg"
+    },
+    {
+      "id": "stable",
+      "name": "Stable",
+      "description": "Four stalls, one occupied by a lathered grey mare with an empty saddle.",
+      "connections": [
+        "common_room"
+      ],
+      "background": "assets/bg/stable.jpg"
+    },
+    {
+      "id": "cellar",
+      "name": "Cellar",
+      "description": "Cold stone, stacked casks, and a section of wall that is newer than the rest.",
+      "connections": [
+        "common_room"
+      ],
+      "background": "assets/bg/cellar.jpg"
+    }
+  ],
+  "shops": [
+    {
+      "id": "lantern_bar",
+      "name": "The Bar",
+      "location": "common_room",
+      "keeper": "mira",
+      "stock": [
+        {
+          "item": "stew"
+        },
+        {
+          "item": "healing_draught",
+          "qty": 2
+        }
+      ]
+    }
+  ],
+  "quests": [
+    {
+      "id": "missing_courier",
+      "title": "The Missing Courier",
+      "description": "A courier bound for the Rusty Lantern never arrived.",
+      "auto_start": true,
+      "stages": [
+        {
+          "id": "ask_around",
+          "description": "Find out what happened to the courier.",
+          "hint": "Completes when the player learns the horse came back riderless, from Tobin or by seeing the mare."
+        },
+        {
+          "id": "find_letter",
+          "description": "Find what the courier was carrying.",
+          "hint": "Completes when the player holds the sealed letter."
+        },
+        {
+          "id": "deliver",
+          "description": "Decide what to do with the letter.",
+          "hint": "Completes when the letter is given to Mira or opened."
+        }
+      ],
+      "rewards": {
+        "money": 15,
+        "items": [
+          {
+            "item": "healing_draught"
+          }
+        ]
+      }
+    }
+  ],
+  "lorebook": [
+    {
+      "id": "marsh_lights",
+      "keys": [
+        "marsh",
+        "lights",
+        "will-o"
+      ],
+      "content": "Locals blame travelers lost on the marsh road on 'the lights'. Mira thinks it's bandits with lanterns. She is half right."
+    },
+    {
+      "id": "cellar_secret",
+      "keys": [
+        "cellar",
+        "wall",
+        "casks"
+      ],
+      "content": "Behind the new wall in the cellar is a smuggler's cache Mira has been holding for a creditor. The courier's letter is a demand for it.",
+      "priority": 10
+    },
+    {
+      "id": "bandit",
+      "keys": [
+        "bandit",
+        "courier",
+        "letter"
+      ],
+      "content": "The courier was waylaid by a marsh bandit working for Mira's creditor. He is still nearby and wants the letter back."
+    }
+  ]
+}

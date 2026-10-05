@@ -1,0 +1,539 @@
+"""Applies actions (see spec/actions.schema.json) to the game state.
+
+Actions come from the LLM or from UI buttons and are never trusted: each one is checked against the
+card and the current state, and either applied in full or rejected with a reason. The messages are
+plain factual sentences because they are fed back to the narrator.
+"""
+
+from .card import PLAYER, SLOTS
+from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
+
+# The card system each action belongs to. An action for a system the card switched off is rejected.
+REQUIRES = {
+    "use_item": "inventory", "transfer_item": "inventory", "add_item": "inventory", "remove_item": "inventory",
+    "create_item": "inventory", "equip": "equipment", "unequip": "equipment",
+    "buy": "money", "sell": "money", "change_money": "money",
+    "gain_xp": "levels", "use_skill": "skills", "unlock_skill": "skills",
+    "change_relationship": "relationships",
+    "set_state": "states", "clear_state": "states",
+}
+
+# What the player must be free to do for each thing they can attempt. A state that blocks it stops
+# the attempt. The narrator's own actions are not held to this: guards can drag a bound prisoner off.
+NEEDS = {
+    "move": "move", "use_item": "items", "transfer_item": "items", "equip": "equipment", "unequip": "equipment",
+    "use_skill": "skills", "buy": "trade", "sell": "trade", "start_battle": "attack",
+}
+
+
+class Rejected(Exception):
+    pass
+
+
+def apply_actions(card, state, actions, by_player=False):
+    return [apply_action(card, state, a, by_player) for a in actions]
+
+
+def apply_action(card, state, action, by_player=False):
+    """Returns {"action", "ok", "message"}. The state is only changed when ok is True.
+
+    by_player marks something the player chose to do, by typing or by a button, as opposed to
+    something the narrator says happened. Only the player's own choices are stopped by their states.
+    """
+    handler = _HANDLERS.get(action.get("type")) if isinstance(action, dict) else None
+    if handler is None:
+        return {"action": action, "ok": False, "message": "Unknown action."}
+    if state.get("battle") and action["type"] in ("move", "buy", "sell", "start_battle"):
+        return {"action": action, "ok": False, "message": "Not in the middle of a fight."}
+    if by_player and action["type"] in NEEDS:
+        stopped_by = blocked(card, state["actors"][PLAYER], NEEDS[action["type"]])
+        if stopped_by:
+            return {"action": action, "ok": False, "message": "%s cannot do that while %s." % (state["actors"][PLAYER]["name"], stopped_by.lower())}
+    if by_player and action["type"] == "move" and state.get("travel_lock") is not None:
+        return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])}
+    feature = REQUIRES.get(action["type"])
+    if feature and not card.has(feature):
+        return {"action": action, "ok": False, "message": "This game does not use %s." % feature}
+    if action["type"] in ("buy", "sell") and not card.has("inventory"):
+        return {"action": action, "ok": False, "message": "This game does not use inventory."}
+    try:
+        message = handler(card, state, action)
+    except Rejected as e:
+        return {"action": action, "ok": False, "message": str(e)}
+    return {"action": action, "ok": True, "message": message}
+
+
+def shop_price(card, state, shop_id, item_id):
+    """What the shop charges for one of the item."""
+    for entry in card.shops[shop_id].get("stock", []):
+        if entry["item"] == item_id and "price" in entry:
+            return entry["price"]
+    return all_items(card, state)[item_id].get("value", 0)
+
+
+def sell_price(card, state, shop_id, item_id):
+    """What the shop pays for one of the item: half its price, rounded down."""
+    return int(shop_price(card, state, shop_id, item_id) // 2)
+
+
+# Lookups. LLMs sometimes send a display name where an id belongs, so both are accepted.
+
+def _find(index, ref, what):
+    if isinstance(ref, str):
+        if ref in index:
+            return ref, index[ref]
+        low = ref.strip().lower()
+        for key, value in index.items():
+            if key.lower() == low or str(value.get("name", value.get("title", ""))).lower() == low:
+                return key, value
+    raise Rejected("There is no %s called %r." % (what, ref))
+
+
+def _who(state, action, key="who"):
+    return _find(state["actors"], action.get(key, PLAYER), "character")
+
+
+def _item(card, state, action):
+    return _find(all_items(card, state), action.get("item"), "item")
+
+
+def _qty(action):
+    qty = action.get("qty", 1)
+    if isinstance(qty, bool) or not isinstance(qty, (int, float)) or qty != int(qty) or qty < 1:
+        raise Rejected("qty must be a whole number of 1 or more.")
+    return int(qty)
+
+
+def _amount(action):
+    amount = action.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        raise Rejected("amount must be a number.")
+    return amount
+
+
+def _fmt(n):
+    return str(int(n)) if n == int(n) else str(n)
+
+
+def _signed(n):
+    return ("+" if n >= 0 else "") + _fmt(n)
+
+
+def _count(item, qty):
+    return item["name"] if qty == 1 else "%s x%d" % (item["name"], qty)
+
+
+def _need(actor, item_id, item, qty):
+    held = actor["inventory"].get(item_id, 0)
+    if held == 0:
+        raise Rejected("%s does not have %s." % (actor["name"], item["name"]))
+    if held < qty:
+        raise Rejected("%s only has %d %s." % (actor["name"], held, item["name"]))
+
+
+def _give(actor, item_id, qty):
+    actor["inventory"][item_id] = actor["inventory"].get(item_id, 0) + qty
+
+
+def _take(actor, item_id, qty):
+    actor["inventory"][item_id] -= qty
+    if actor["inventory"][item_id] <= 0:
+        del actor["inventory"][item_id]
+
+
+def _change_stat(card, state, who, stat_id, amount):
+    actor = state["actors"][who]
+    stat = card.stats[stat_id]
+    actor["stats"][stat_id] = clamp_stat(card, actor, stat_id, actor["stats"].get(stat_id, stat["default"]) + amount)
+    return "%s %s, now %s" % (stat["name"], _signed(amount), _fmt(effective_stat(card, state, who, stat_id)))
+
+
+# Handlers. Each one checks everything first and only then changes the state.
+
+def _use_item(card, state, a):
+    wid, who = _who(state, a)
+    iid, item = _item(card, state, a)
+    tid, target = _who(state, a, "target") if "target" in a else (wid, who)
+    _need(who, iid, item, 1)
+    if item["type"] == "equipment":
+        raise Rejected("%s is equipment. Equip it instead of using it." % item["name"])
+    if item["type"] != "consumable":
+        return "%s uses %s. It is not used up." % (who["name"], item["name"])
+    _take(who, iid, 1)
+    changes = [_change_stat(card, state, tid, e["stat"], e["amount"]) for e in item.get("effects", [])]
+    on = "" if tid == wid else " on %s" % target["name"]
+    return "%s uses %s%s%s." % (who["name"], item["name"], on, " (%s)" % "; ".join(changes) if changes else "")
+
+
+def _equip(card, state, a):
+    wid, who = _who(state, a)
+    iid, item = _item(card, state, a)
+    if iid in who["equipment"].values():
+        raise Rejected("%s already has %s equipped." % (who["name"], item["name"]))
+    _need(who, iid, item, 1)
+    if item["type"] != "equipment":
+        raise Rejected("%s cannot be equipped." % item["name"])
+    slot = item["slot"]
+    previous = who["equipment"].get(slot)
+    _take(who, iid, 1)
+    if previous:
+        _give(who, previous, 1)
+    who["equipment"][slot] = iid
+    return "%s equips %s." % (who["name"], item["name"])
+
+
+def _unequip(card, state, a):
+    wid, who = _who(state, a)
+    slot = a.get("slot")
+    if slot not in SLOTS:
+        raise Rejected("There is no equipment slot called %r." % (slot,))
+    iid = who["equipment"].get(slot)
+    if not iid:
+        raise Rejected("%s has nothing equipped on %s." % (who["name"], slot))
+    del who["equipment"][slot]
+    _give(who, iid, 1)
+    return "%s takes off %s." % (who["name"], all_items(card, state)[iid]["name"])
+
+
+def _transfer_item(card, state, a):
+    fid, giver = _who(state, a, "from")
+    tid, taker = _who(state, a, "to")
+    iid, item = _item(card, state, a)
+    qty = _qty(a)
+    if fid == tid:
+        raise Rejected("%s cannot give an item to themselves." % giver["name"])
+    if not together(card, giver, taker):
+        raise Rejected("%s and %s are not in the same place." % (giver["name"], taker["name"]))
+    _need(giver, iid, item, qty)
+    _take(giver, iid, qty)
+    _give(taker, iid, qty)
+    return "%s gives %s to %s." % (giver["name"], _count(item, qty), taker["name"])
+
+
+def _add_item(card, state, a):
+    wid, who = _who(state, a)
+    iid, item = _item(card, state, a)
+    qty = _qty(a)
+    _give(who, iid, qty)
+    return "%s gets %s." % (who["name"], _count(item, qty))
+
+
+def _remove_item(card, state, a):
+    wid, who = _who(state, a)
+    iid, item = _item(card, state, a)
+    qty = _qty(a)
+    _need(who, iid, item, qty)
+    _take(who, iid, qty)
+    return "%s loses %s." % (who["name"], _count(item, qty))
+
+
+def _create_item(card, state, a):
+    wid, who = _who(state, a)
+    qty = _qty(a)
+    name = a.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise Rejected("A new item needs a name.")
+    name = name.strip()
+    items = all_items(card, state)
+    try:
+        iid, item = _find(items, name, "item")
+    except Rejected:
+        if not card.allow_generated_items:
+            raise Rejected("This game only has the items its card defines; %r is not one of them." % name)
+        base = "gen_" + ("".join(c if c.isalnum() else "_" for c in name.lower()).strip("_") or "item")
+        iid, n = base, 2
+        while iid in items:
+            iid, n = "%s_%d" % (base, n), n + 1
+        item = {"id": iid, "name": name, "description": str(a.get("description", "")), "type": "misc", "generated": True}
+        state["generated_items"][iid] = item
+    _give(who, iid, qty)
+    return "%s gets %s." % (who["name"], _count(item, qty))
+
+
+def _shop(card, state, a):
+    sid, shop = _find(card.shops, a.get("shop"), "shop")
+    player = state["actors"][PLAYER]
+    if shop.get("location") and player["location"] != shop["location"]:
+        raise Rejected("%s is not at %s." % (player["name"], shop["name"]))
+    return sid, shop, player
+
+
+def _buy(card, state, a):
+    sid, shop, player = _shop(card, state, a)
+    iid, item = _item(card, state, a)
+    qty = _qty(a)
+    stock = state["shops"][sid]
+    if iid not in stock:
+        raise Rejected("%s does not sell %s." % (shop["name"], item["name"]))
+    left = stock[iid]
+    if left is not None and left < qty:
+        raise Rejected("%s is sold out of %s." % (shop["name"], item["name"]) if left == 0
+                       else "%s only has %d %s left." % (shop["name"], left, item["name"]))
+    cost = shop_price(card, state, sid, iid) * qty
+    if player["money"] < cost:
+        raise Rejected("%s costs %s %s but %s only has %s." % (_count(item, qty), _fmt(cost), card.currency, player["name"], _fmt(player["money"])))
+    player["money"] -= cost
+    if shop.get("keeper"):
+        state["actors"][shop["keeper"]]["money"] += cost
+    if left is not None:
+        stock[iid] = left - qty
+    _give(player, iid, qty)
+    return "%s buys %s from %s for %s %s." % (player["name"], _count(item, qty), shop["name"], _fmt(cost), card.currency)
+
+
+def _sell(card, state, a):
+    sid, shop, player = _shop(card, state, a)
+    iid, item = _item(card, state, a)
+    qty = _qty(a)
+    _need(player, iid, item, qty)
+    pay = sell_price(card, state, sid, iid) * qty
+    if pay <= 0:
+        raise Rejected("%s will not buy %s." % (shop["name"], item["name"]))
+    _take(player, iid, qty)
+    player["money"] += pay
+    stock = state["shops"][sid]
+    if stock.get(iid) is not None:
+        stock[iid] += qty
+    return "%s sells %s to %s for %s %s." % (player["name"], _count(item, qty), shop["name"], _fmt(pay), card.currency)
+
+
+def _change_money(card, state, a):
+    wid, who = _who(state, a)
+    amount = _amount(a)
+    if who["money"] + amount < 0:
+        raise Rejected("%s only has %s %s." % (who["name"], _fmt(who["money"]), card.currency))
+    who["money"] += amount
+    return "%s %s %s %s, now %s." % (who["name"], "gains" if amount >= 0 else "loses", _fmt(abs(amount)), card.currency, _fmt(who["money"]))
+
+
+def _change_stat_action(card, state, a):
+    wid, who = _who(state, a)
+    sid, stat = _find(card.stats, a.get("stat"), "stat")
+    return "%s: %s." % (who["name"], _change_stat(card, state, wid, sid, _amount(a)))
+
+
+def _move(card, state, a):
+    wid, who = _who(state, a)
+    lid, location = _find(card.locations, a.get("location"), "location")
+    here = card.locations.get(who["location"])
+    if here:
+        if lid == here["id"]:
+            raise Rejected("%s is already at %s." % (who["name"], location["name"]))
+        if lid not in here.get("connections", []) and here["id"] not in location.get("connections", []):
+            raise Rejected("%s cannot get to %s directly from %s." % (who["name"], location["name"], here["name"]))
+    who["location"] = lid
+    if here:
+        # Naming where they left lets the narrator weigh what leaving means, and send them back if someone would have stopped them.
+        return "%s leaves %s and goes to %s." % (who["name"], here["name"], location["name"])
+    return "%s goes to %s." % (who["name"], location["name"])
+
+
+def _quest_start(card, state, a):
+    qid, quest = _find(card.quests, a.get("quest"), "quest")
+    if qid in state["quests"]:
+        raise Rejected("Quest %s was already started." % quest["title"])
+    state["quests"][qid] = {"status": "active", "stage": 0}
+    return "Quest started: %s. Objective: %s" % (quest["title"], quest["stages"][0]["description"])
+
+
+def _active_quest(card, state, a):
+    qid, quest = _find(card.quests, a.get("quest"), "quest")
+    progress = state["quests"].get(qid)
+    if not progress or progress["status"] != "active":
+        raise Rejected("Quest %s is not active." % quest["title"])
+    return quest, progress
+
+
+def _quest_advance(card, state, a):
+    quest, progress = _active_quest(card, state, a)
+    progress["stage"] += 1
+    if progress["stage"] < len(quest["stages"]):
+        return "Quest %s: new objective: %s" % (quest["title"], quest["stages"][progress["stage"]]["description"])
+    progress["status"] = "done"
+    player = state["actors"][PLAYER]
+    rewards = quest.get("rewards", {})
+    got = []
+    if rewards.get("money") and card.has("money"):
+        player["money"] += rewards["money"]
+        got.append("%s %s" % (_fmt(rewards["money"]), card.currency))
+    for stack in rewards.get("items", []) if card.has("inventory") else []:
+        _give(player, stack["item"], stack.get("qty", 1))
+        got.append(_count(card.items[stack["item"]], stack.get("qty", 1)))
+    for stat_id, amount in rewards.get("stats", {}).items():
+        got.append(_change_stat(card, state, PLAYER, stat_id, amount))
+    return "Quest completed: %s.%s" % (quest["title"], " Reward: %s." % ", ".join(got) if got else "")
+
+
+def _quest_fail(card, state, a):
+    quest, progress = _active_quest(card, state, a)
+    progress["status"] = "failed"
+    return "Quest failed: %s." % quest["title"]
+
+
+def _gain_xp(card, state, a):
+    wid, who = _who(state, a)
+    amount = _amount(a)
+    if amount <= 0:
+        raise Rejected("Experience gained must be above zero.")
+    who["xp"] += amount
+    news = ["%s gains %s experience" % (who["name"], _fmt(amount))]
+    while who["xp"] >= xp_needed(card, who):
+        who["xp"] -= xp_needed(card, who)
+        who["level"] += 1
+        gains = []
+        for stat_id, gain in sorted(card.level_gains.items()):
+            ceiling = stat_max(card, who, stat_id)
+            if ceiling is not None:
+                who["max"][stat_id] = ceiling + gain
+            who["stats"][stat_id] = clamp_stat(card, who, stat_id, who["stats"].get(stat_id, card.stats[stat_id]["default"]) + gain)
+            gains.append("%s %s" % (card.stats[stat_id]["name"], _signed(gain)))
+        news.append("reaches level %d%s" % (who["level"], " (%s)" % ", ".join(gains) if gains else ""))
+        for skill_id, known in sorted(who["skills"].items()):
+            if not known["unlocked"] and known.get("unlock_level") and known["unlock_level"] <= who["level"]:
+                known["unlocked"] = True
+                news.append("learns %s" % card.skills[skill_id]["name"])
+    return ", ".join(news) + "."
+
+
+def _use_skill(card, state, a):
+    wid, who = _who(state, a)
+    sid, skill = _find(card.skills, a.get("skill"), "skill")
+    known = who["skills"].get(sid)
+    if not known:
+        raise Rejected("%s does not know %s." % (who["name"], skill["name"]))
+    if not known["unlocked"]:
+        raise Rejected("%s has not unlocked %s yet." % (who["name"], skill["name"]))
+    if skill.get("target", "other") == "self":
+        tid, target = wid, who
+    elif "target" not in a:
+        raise Rejected("%s needs a target." % skill["name"])
+    else:
+        tid, target = _who(state, a, "target")
+        if not together(card, who, target):
+            raise Rejected("%s and %s are not in the same place." % (who["name"], target["name"]))
+    for stat_id, cost in skill.get("cost", {}).items():
+        if who["stats"].get(stat_id, 0) < cost:
+            raise Rejected("%s does not have enough %s for %s (needs %s, has %s)." % (
+                who["name"], card.stats[stat_id]["name"], skill["name"], _fmt(cost), _fmt(who["stats"].get(stat_id, 0))))
+    changes = [_change_stat(card, state, wid, stat_id, -cost) for stat_id, cost in sorted(skill.get("cost", {}).items())]
+    effects = [_change_stat(card, state, tid, e["stat"], e["amount"]) for e in skill.get("effects", [])]
+    on = "" if tid == wid else " on %s" % target["name"]
+    told = []
+    if changes:
+        told.append("cost: " + "; ".join(changes))
+    if effects:
+        told.append(("effect: " if tid == wid else "%s: " % target["name"]) + "; ".join(effects))
+    return "%s uses %s%s%s." % (who["name"], skill["name"], on, " (%s)" % " | ".join(told) if told else "")
+
+
+def _unlock_skill(card, state, a):
+    wid, who = _who(state, a)
+    sid, skill = _find(card.skills, a.get("skill"), "skill")
+    known = who["skills"].setdefault(sid, {"unlocked": False, "unlock_level": None})
+    if known["unlocked"]:
+        raise Rejected("%s already knows %s." % (who["name"], skill["name"]))
+    known["unlocked"] = True
+    return "%s learns %s." % (who["name"], skill["name"])
+
+
+def _change_relationship(card, state, a):
+    wid, who = _who(state, a)
+    if wid == PLAYER:
+        raise Rejected("%s is tracked for other characters, not the player." % card.relationship_name)
+    amount = _amount(a)
+    who["relationship"] = max(0, min(100, who["relationship"] + amount))
+    return "%s's %s %s, now %s/100." % (who["name"], card.relationship_name.lower(), _signed(amount), _fmt(who["relationship"]))
+
+
+def _set_state(card, state, a):
+    wid, who = _who(state, a)
+    ref = a.get("state")
+    if not isinstance(ref, str) or not ref.strip() or len(ref) > 40:
+        raise Rejected("A state needs a short name.")
+    try:
+        sid, known = _find(card.states, ref, "state")
+    except Rejected:
+        # A state the card never defined is still worth remembering; it just stops nothing.
+        sid = "".join(c if c.isalnum() else "_" for c in ref.strip().lower()).strip("_") or "state"
+    note = a.get("note") if isinstance(a.get("note"), str) else ""
+    who["states"][sid] = {"name": state_name(card, sid), "note": note.strip()[:200]}
+    return "%s is now %s%s." % (who["name"], who["states"][sid]["name"].lower(), " (%s)" % who["states"][sid]["note"] if note.strip() else "")
+
+
+def _clear_state(card, state, a):
+    wid, who = _who(state, a)
+    ref = a.get("state")
+    held = dict((sid, h) for sid, h in who["states"].items())
+    match = [sid for sid, h in held.items() if isinstance(ref, str) and ref.strip().lower() in (sid, h["name"].lower())]
+    if not match:
+        raise Rejected("%s is not %s." % (who["name"], ref))
+    name = who["states"].pop(match[0])["name"]
+    return "%s is no longer %s." % (who["name"], name.lower())
+
+
+def _lock_travel(card, state, a):
+    reason = a.get("reason") if isinstance(a.get("reason"), str) and a["reason"].strip() else "something is keeping them here."
+    state["travel_lock"] = reason.strip()[:200]
+    return "%s can no longer leave: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])
+
+
+def _unlock_travel(card, state, a):
+    if state.get("travel_lock") is None:
+        raise Rejected("%s is already free to travel." % state["actors"][PLAYER]["name"])
+    state["travel_lock"] = None
+    return "%s is free to travel again." % state["actors"][PLAYER]["name"]
+
+
+def _start_battle(card, state, a):
+    if not card.battle_system:
+        raise Rejected("Fights in this game are told in the story, not run by the game.")
+    player = state["actors"][PLAYER]
+    health = card.battle["health_stat"]
+    refs = a.get("enemies")
+    refs = [refs] if isinstance(refs, str) else refs
+    if not isinstance(refs, list) or not refs:
+        raise Rejected("A fight needs at least one enemy.")
+    enemies = []
+    for ref in refs:
+        eid, enemy = _find(state["actors"], ref, "character")
+        if eid == PLAYER:
+            raise Rejected("%s cannot fight themselves." % player["name"])
+        if enemy["stats"].get(health, 0) <= 0:
+            raise Rejected("%s is in no state to fight." % enemy["name"])
+        if not together(card, enemy, player):
+            raise Rejected("%s is not here." % enemy["name"])
+        if eid not in enemies:
+            enemies.append(eid)
+    for eid in enemies:
+        # An enemy the card keeps off the map walks into the scene when its fight starts.
+        state["actors"][eid]["location"] = player["location"]
+    state["battle"] = {"enemies": enemies, "round": 1}
+    return "A fight begins: %s against %s." % (player["name"], ", ".join(state["actors"][e]["name"] for e in enemies))
+
+
+_HANDLERS = {
+    "use_item": _use_item,
+    "equip": _equip,
+    "unequip": _unequip,
+    "transfer_item": _transfer_item,
+    "add_item": _add_item,
+    "remove_item": _remove_item,
+    "create_item": _create_item,
+    "buy": _buy,
+    "sell": _sell,
+    "change_money": _change_money,
+    "change_stat": _change_stat_action,
+    "move": _move,
+    "quest_start": _quest_start,
+    "quest_advance": _quest_advance,
+    "quest_fail": _quest_fail,
+    "gain_xp": _gain_xp,
+    "use_skill": _use_skill,
+    "unlock_skill": _unlock_skill,
+    "change_relationship": _change_relationship,
+    "start_battle": _start_battle,
+    "lock_travel": _lock_travel,
+    "unlock_travel": _unlock_travel,
+    "set_state": _set_state,
+    "clear_state": _clear_state,
+}
