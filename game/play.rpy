@@ -32,10 +32,25 @@ init python:
 
     from aigame import text as aig_text
 
-    ## Makes card or LLM text safe to show exactly as it is.
-    esc = aig_text.escape
-    ## The same, with *italic*, **bold** and the like applied. For story text and what the player typed.
-    rich = aig_text.to_renpy
+    def with_names(text):
+        """Card text with its placeholders filled in. Card authors write {{user}} for the player
+        anywhere at all (descriptions, quest text, notes), so everything shown goes through this."""
+        try:
+            if store.game_state is not None and store.card_name:
+                return aig_prompt.fill(current_card(), store.game_state, text)
+            card = inserted_card()
+        except aig_card.CardError:
+            card = None
+        ## No game in progress: the main menu and Card info use the card's default player name.
+        return text.replace("{{user}}", (card.data.get("default_persona", {}).get("name") if card else None) or "you")
+
+    def esc(text):
+        """Makes card or LLM text safe to show, with the player's name filled in."""
+        return aig_text.escape(with_names(text))
+
+    def rich(text):
+        """The same, with *italic*, **bold** and the like applied. For story text and what the player typed."""
+        return aig_text.to_renpy(with_names(text))
 
     def card_text(text):
         return esc(text.replace("{{user}}", store.game_state["actors"][aig_card.PLAYER]["name"]))
@@ -98,8 +113,10 @@ init python:
         here = card.locations.get(location_id or store.game_state["actors"][aig_card.PLAYER]["location"])
         if not here:
             return []
+        ## Only places on the player's map: a hidden place is not offered, or even named, until revealed.
         return [l["id"] for l in card.data.get("locations", [])
-                if l["id"] != here["id"] and (l["id"] in here.get("connections", []) or here["id"] in l.get("connections", []))]
+                if l["id"] != here["id"] and aig_state.knows_place(store.game_state, l["id"])
+                and (l["id"] in here.get("connections", []) or here["id"] in l.get("connections", []))]
 
     def status_line():
         card = current_card()
@@ -252,7 +269,7 @@ screen hud(start="inventory"):
                             if game_state["travel_lock"] is not None:
                                 text esc("You cannot leave right now: " + game_state["travel_lock"]) color "#ffb070"
                                 null height 6
-                            for place in card.data.get("locations", []):
+                            for place in [l for l in card.data.get("locations", []) if aig_state.knows_place(game_state, l["id"])]:
                                 hbox:
                                     spacing 16
                                     if here and place["id"] == here["id"]:

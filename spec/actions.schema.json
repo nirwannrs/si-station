@@ -223,6 +223,16 @@
             }
           },
           {
+            "description": "Narrator only. Puts a location the card marked hidden on the player's map.",
+            "type": "object",
+            "required": ["type", "location"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "reveal_location" },
+              "location": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
             "description": "Narrator only. Closes the map to the player until unlock_travel. The narrator can still move them.",
             "type": "object",
             "required": ["type"],

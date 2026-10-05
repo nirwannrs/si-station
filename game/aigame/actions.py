@@ -6,6 +6,7 @@ plain factual sentences because they are fed back to the narrator.
 """
 
 from .card import PLAYER, SLOTS
+from .state import knows_place, reveal
 from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
@@ -51,6 +52,14 @@ def apply_action(card, state, action, by_player=False):
             return {"action": action, "ok": False, "message": "%s cannot do that while %s." % (state["actors"][PLAYER]["name"], stopped_by.lower())}
     if by_player and action["type"] == "move" and state.get("travel_lock") is not None:
         return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])}
+    if by_player and action["type"] == "move":
+        try:
+            wanted = _find(card.locations, action.get("location"), "location")[0]
+        except Rejected:
+            wanted = None
+        if wanted is not None and not knows_place(state, wanted):
+            # Worded so as not to confirm the place exists.
+            return {"action": action, "ok": False, "message": "%s does not know of any such place to go to." % state["actors"][PLAYER]["name"]}
     feature = REQUIRES.get(action["type"])
     if feature and not card.has(feature):
         return {"action": action, "ok": False, "message": "This game does not use %s." % feature}
@@ -322,6 +331,8 @@ def _move(card, state, a):
         if lid not in here.get("connections", []) and here["id"] not in location.get("connections", []):
             raise Rejected("%s cannot get to %s directly from %s." % (who["name"], location["name"], here["name"]))
     who["location"] = lid
+    if wid == PLAYER:
+        reveal(card, state, [lid])      # being taken somewhere puts it on the map
     if here:
         # Naming where they left lets the narrator weigh what leaving means, and send them back if someone would have stopped them.
         return "%s leaves %s and goes to %s." % (who["name"], here["name"], location["name"])
@@ -471,6 +482,13 @@ def _clear_state(card, state, a):
     return "%s is no longer %s." % (who["name"], name.lower())
 
 
+def _reveal_location(card, state, a):
+    lid, location = _find(card.locations, a.get("location"), "location")
+    if not reveal(card, state, [lid]):
+        raise Rejected("%s is already on the map." % location["name"])
+    return "The map now shows %s." % location["name"]
+
+
 def _lock_travel(card, state, a):
     reason = a.get("reason") if isinstance(a.get("reason"), str) and a["reason"].strip() else "something is keeping them here."
     state["travel_lock"] = reason.strip()[:200]
@@ -532,6 +550,7 @@ _HANDLERS = {
     "unlock_skill": _unlock_skill,
     "change_relationship": _change_relationship,
     "start_battle": _start_battle,
+    "reveal_location": _reveal_location,
     "lock_travel": _lock_travel,
     "unlock_travel": _unlock_travel,
     "set_state": _set_state,

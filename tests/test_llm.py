@@ -62,11 +62,36 @@ class RequestTest(unittest.TestCase):
                               ("local", {"choices": [{"message": {"content": None}}]}), ("local", "text")]:
             self.assertRaises(llm.LLMError, llm.chat_text, provider, bad)
 
+    def test_noticing_a_reply_that_was_cut_short(self):
+        self.assertTrue(llm.chat_cut_short("anthropic", {"stop_reason": "max_tokens"}))
+        self.assertFalse(llm.chat_cut_short("anthropic", {"stop_reason": "end_turn"}))
+        self.assertTrue(llm.chat_cut_short("openrouter", {"choices": [{"finish_reason": "length", "message": {"content": "x"}}]}))
+        self.assertFalse(llm.chat_cut_short("openrouter", {"choices": [{"finish_reason": "stop"}]}))
+        for odd in ({}, {"choices": []}, "text", None):
+            self.assertFalse(llm.chat_cut_short("local", odd))
+        self.assertEqual(llm.estimate_tokens("a" * 350, [{"role": "user", "content": "b" * 350}]), 200)
+
     def test_model_list_and_errors(self):
         self.assertEqual(llm.model_ids({"data": [{"id": "b"}, {"id": "a"}, {"x": 1}]}), ["a", "b"])
         self.assertIn("API key was not accepted", llm.describe_http_error(401, '{"error": {"message": "bad key"}}'))
         self.assertIn("bad key", llm.describe_http_error(401, '{"error": {"message": "bad key"}}'))
         self.assertIn("Could not reach", llm.describe_http_error(None, None))
+
+    def test_context_sizes_from_model_lists(self):
+        listing = {"data": [
+            {"id": "anthropic/claude-sonnet-5.5", "context_length": 1000000, "top_provider": {"context_length": 200000}},   # OpenRouter
+            {"id": "claude-opus-5-5", "max_input_tokens": 1000000, "max_tokens": 128000},                                  # Anthropic
+            {"id": "open/router-nested", "top_provider": {"context_length": 32768}},
+            {"id": "llama-local", "meta": {"n_ctx_train": 8192}},                                                          # llama.cpp
+            {"id": "lmstudio-model", "max_context_length": 131072},
+            {"id": "says-nothing", "object": "model"},
+            {"id": "nonsense", "context_length": "lots"}, {"id": "tiny", "context_length": 8}, {"no_id": True}, "junk"]}
+        self.assertEqual(llm.model_contexts(listing), {"anthropic/claude-sonnet-5.5": 1000000, "claude-opus-5-5": 1000000,
+                                                       "open/router-nested": 32768, "llama-local": 8192, "lmstudio-model": 131072})
+        self.assertEqual(llm.model_contexts([{"id": "bare-list", "context_window": 4096}]), {"bare-list": 4096})
+        self.assertEqual(llm.model_contexts({}), {})
+        self.assertTrue(llm.models_request({"provider": "nanogpt", "api_key": "k"})["url"].endswith("/models?detailed=true"))
+        self.assertTrue(llm.models_request({"provider": "openrouter", "api_key": "k"})["url"].endswith("/models"))
 
     def test_extract_json(self):
         self.assertEqual(llm.extract_json('Sure!\n```json\n{"actions": []}\n```'), {"actions": []})
@@ -112,6 +137,13 @@ class PromptTest(unittest.TestCase):
         for changing in ["[Current game state]", "[Active quests]", "[Background knowledge]"]:
             self.assertNotIn(changing, system)
         self.assertNotIn("{{user}}", system + last)
+
+    def test_placeholders_are_filled(self):
+        self.assertEqual(prompt.fill(self.card, self.state, "{{user}} owes {{user}}'s host 5 {{currency}}."), "Ash owes Ash's host 5 Gold.")
+        self.assertEqual(prompt.fill(self.card, self.state, "{{char}} waves."), "{{char}} waves.")          # three characters: no telling which
+        cafe = load_card(os.path.join(ROOT, "cards", "quiet_cafe"))
+        del cafe.characters["eli"]
+        self.assertEqual(prompt.fill(cafe, new_game(cafe), "{{char}} waves at {{user}}."), "Noor waves at Sam.")
 
     def test_game_mechanics_block_cannot_be_disabled(self):
         for block in self.preset["blocks"]:
@@ -400,6 +432,17 @@ class CachingTest(unittest.TestCase):
         self.assertEqual(sum(isinstance(m["content"], list) for m in body["messages"]), 1)
         self.assertEqual(body["messages"][-2]["content"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})
 
+    def test_summarizing_keeps_the_instructions_cached(self):
+        for n in range(6):
+            self.finish_turn("Line %d." % n, "Reply %d." % n)
+        before = self.request("Next.")
+        self.state["summary"], self.state["summarized"] = "Earlier, the traveler arrived and talked with Mira.", 4
+        after = self.request("Next.")
+        self.assertEqual(after["system"], before["system"])                           # the long instructions are untouched
+        self.assertNotIn("Story so far", json.dumps(after["system"]))
+        self.assertIn("[Story so far]\nEarlier, the traveler arrived", after["messages"][-1]["content"])
+        self.assertLess(len(after["messages"]), len(before["messages"]))              # the folded turns are no longer sent
+
     def test_a_preset_cannot_put_changing_blocks_in_the_cached_part(self):
         blocks = self.preset["blocks"]
         self.preset["blocks"] = [b for b in blocks if b.get("slot") in ("state", "quests", "lorebook")] + [b for b in blocks if b.get("slot") not in ("state", "quests", "lorebook")]
@@ -501,6 +544,129 @@ class TrackerTest(unittest.TestCase):
             del actor["note"]
         reconcile(self.card, self.state)
         self.assertEqual(self.actors["mira"]["note"], "")
+
+
+class HiddenPlacesTest(unittest.TestCase):
+    def setUp(self):
+        from aigame.card import Card, check_card
+        base = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        data = json.loads(json.dumps(base.data))
+        for location in data["locations"]:
+            if location["id"] in ("cellar", "common_room"):
+                location["hidden"] = True                       # the start location is marked hidden too, to check it is shown anyway
+        self.assertEqual(check_card(data), [])
+        self.card = Card(data, base.path)
+        self.state = new_game(self.card)
+
+    def act(self, by_player=False, **action):
+        return apply_actions(self.card, self.state, [action], by_player=by_player)[0]
+
+    def test_hidden_places_start_off_the_map(self):
+        self.assertEqual(self.state["revealed"], ["common_room", "stable"])
+        tried = self.act(by_player=True, type="move", location="cellar")
+        self.assertEqual((tried["ok"], tried["message"]), (False, "Traveler does not know of any such place to go to."))
+        self.assertFalse(self.act(by_player=True, type="move", location="Cellar")["ok"])            # nor by its name
+        self.assertTrue(self.act(by_player=True, type="move", location="stable")["ok"])
+
+    def test_narrator_is_told_and_can_reveal(self):
+        text = prompt.describe_state(self.card, self.state)
+        self.assertIn("Cellar (cellar) [the player does not know of it yet]", text)
+        self.assertIn("Places the player does not know of yet", text)
+        self.assertIn("Cellar (cellar): Cold stone", text)
+        self.assertIn("reveal_location", prompt.action_protocol(self.card))
+        self.assertEqual(self.act(type="reveal_location", location="cellar")["message"], "The map now shows Cellar.")
+        self.assertFalse(self.act(type="reveal_location", location="cellar")["ok"])
+        self.assertNotIn("does not know of", prompt.describe_state(self.card, self.state))
+        self.assertTrue(self.act(by_player=True, type="move", location="cellar")["ok"])
+
+    def test_being_taken_somewhere_reveals_it(self):
+        self.assertTrue(self.act(type="move", who="player", location="cellar")["ok"])
+        self.assertIn("cellar", self.state["revealed"])
+
+    def test_helpers_that_speak_for_the_player_are_not_told(self):
+        for system, messages in (prompt.resolver_prompt(self.card, self.state, "I look around."), prompt.suggest_prompt(self.card, self.state, 3)):
+            self.assertNotIn("Cellar (cellar)", messages[0]["content"])               # the place; Mira's Cellar Key is a separate thing
+            self.assertNotIn("does not know of", messages[0]["content"])
+        self.assertEqual(prompt.parse_resolver('{"actions": [{"type": "reveal_location", "location": "cellar"}]}', self.card), [])
+
+    def test_scene_director_reveals_from_the_text(self):
+        from aigame.state import reveal
+        system, messages = prompt.director_prompt(self.card, self.state, ["Mira nods at the locked door. \"The cellar is down there.\""])
+        self.assertIn("[Places the player does not know of yet]\n- Cellar (cellar): Cold stone", messages[0]["content"])
+        self.assertIn('"revealed"', system)
+        found = prompt.parse_revealed('{"paragraphs": [], "revealed": ["cellar", "atlantis", 7, "stable"]}', self.card)
+        self.assertEqual(found, ["cellar", "stable"])
+        self.assertEqual(reveal(self.card, self.state, found), ["Cellar"])                           # the stable was already known
+        self.assertEqual(prompt.parse_revealed("no json", self.card), [])
+        self.assertNotIn("Places the player does not know", prompt.director_prompt(self.card, self.state, ["x"])[1][0]["content"])
+
+    def test_cards_without_hidden_places_are_unchanged(self):
+        plain = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(plain)
+        self.assertEqual(state["revealed"], ["common_room", "stable", "cellar"])
+        self.assertNotIn("does not know of", prompt.describe_state(plain, state))
+        del state["revealed"]                                                                         # a save from before this existed
+        from aigame.state import reconcile
+        reconcile(plain, state)
+        self.assertEqual(state["revealed"], ["common_room", "stable", "cellar"])
+
+
+class BookkeeperTest(unittest.TestCase):
+    def setUp(self):
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            self.preset = json.load(f)
+
+    def test_story_model_is_asked_only_for_the_story(self):
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I cast a light.", [], record=False)
+        whole = system + messages[-1]["content"]
+        for absent in ["<actions>", '{"type":', "change_stat", "set_state", "reveal_location", "lock_travel"]:
+            self.assertNotIn(absent, whole, absent)
+        for present in ["A bookkeeper reads what you write", "REJECTED", "is no longer flying", "Restrained (restrained)", "they are stopped and still where they were"]:
+            self.assertIn(present, whole, present)
+        with_actions = prompt.narrator_prompt(self.card, self.state, self.preset, "I cast a light.", [])[0]
+        self.assertIn("<actions>", with_actions)
+        self.assertLess(len(system), len(with_actions))                               # less for a small model to carry
+
+    def test_bookkeeper_is_given_everything_it_needs(self):
+        apply_actions(self.card, self.state, [{"type": "set_state", "state": "airborne", "note": "on a broom"}])
+        results = [{"ok": True, "message": "Traveler uses Quick Strike on Mira Oakhand."}]
+        system, messages = prompt.bookkeeper_prompt(self.card, self.state, "I land and cast a light.", results,
+                                                    "You touch down in the yard. A cold flicker of marsh-light leaves your fingers.")
+        for part in ["bookkeeper", '"type": "change_stat"', '"type": "clear_state"', '"type": "move"', "Costs and harm", "For every state the game state lists",
+                     "the player ends the text somewhere other", "Do not record them again", "Restrained (restrained)", 'Reply with JSON only: {"actions": [ ... ]}']:
+            self.assertIn(part, system, part)
+        self.assertNotIn("{{user}}", system)
+        user = messages[0]["content"]
+        for part in ["State: Airborne (on a broom)", "Mana (mana) 10/10", "[Player's message]\nI land and cast a light.",
+                     "[Engine results already recorded this turn]\n- done: Traveler uses Quick Strike", "[Narrator's new text]\nYou touch down", "[Active quests]"]:
+            self.assertIn(part, user, part)
+
+    def test_what_it_reports_is_applied_and_checked(self):
+        apply_actions(self.card, self.state, [{"type": "set_state", "state": "airborne", "note": "on a broom"}])
+        reply = """Here is what changed:
+```json
+{"actions": [{"type": "change_stat", "who": "player", "stat": "mana", "amount": -4},
+             {"type": "clear_state", "who": "player", "state": "airborne"},
+             {"type": "move", "who": "player", "location": "stable"},
+             {"type": "add_item", "who": "player", "item": "dragon_egg"}, "nonsense"]}
+```"""
+        actions = prompt.parse_bookkeeper(reply)
+        self.assertEqual(len(actions), 4)
+        results = apply_actions(self.card, self.state, actions)
+        self.assertEqual([r["ok"] for r in results], [True, True, True, False])       # the invented item is refused, as from any source
+        me = self.state["actors"]["player"]
+        self.assertEqual((me["stats"]["mana"], me["states"], me["location"]), (6, {}, "stable"))
+        self.assertEqual(prompt.parse_bookkeeper("I could not tell."), [])
+        self.assertEqual(prompt.parse_bookkeeper('{"actions": []}'), [])
+
+    def test_only_asked_about_what_the_card_tracks(self):
+        cafe = load_card(os.path.join(ROOT, "cards", "quiet_cafe"))
+        system, messages = prompt.bookkeeper_prompt(cafe, new_game(cafe), "Hello.", [], "Noor smiles.")
+        self.assertIn("Relationships", system)
+        for absent in ["Costs and harm", "Belongings", "Experience", "Fights", "change_money", "add_item"]:
+            self.assertNotIn(absent, system, absent)
 
 
 if __name__ == "__main__":

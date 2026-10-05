@@ -11,6 +11,7 @@ label start:
         "A model is needed to play. You can set one up any time from Models in the main menu."
         return
 
+    $ sync_context_size()
     $ start_card(persistent.card)
     $ start_suggestions()
 
@@ -24,6 +25,9 @@ label start:
         $ present()
 
 label play:
+
+    ## Waiting for the player from here. A save made at the input screen resumes at this line.
+    $ open_turn()
 
     ## A fight in a card that runs its own fights is played out on the battle screen; the story
     ## picks up again when it ends.

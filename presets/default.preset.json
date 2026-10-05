@@ -5,7 +5,7 @@
   "description": "Balanced narration, second person, medium length.",
   "sampling": {
     "temperature": 0.9,
-    "max_tokens": 600
+    "max_tokens": 2000
   },
   "context": {
     "max_context_tokens": 16000,
@@ -78,16 +78,16 @@
       "slot": "action_protocol"
     },
     {
-      "id": "summary",
-      "name": "Story so far",
-      "kind": "slot",
-      "slot": "summary"
-    },
-    {
       "id": "history",
       "name": "Recent turns",
       "kind": "slot",
       "slot": "history"
+    },
+    {
+      "id": "summary",
+      "name": "Story so far",
+      "kind": "slot",
+      "slot": "summary"
     },
     {
       "id": "lorebook",

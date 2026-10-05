@@ -11,7 +11,7 @@ from .actions import shop_price
 from .card import PLAYER
 from .llm import extract_json
 from .text import keep_marks_paired
-from .state import describe_states, effective_stat, get_item, is_away, stat_max, xp_needed
+from .state import describe_states, effective_stat, get_item, is_away, knows_place, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -20,6 +20,7 @@ HELPER_TASKS = (
     ("suggest_choices", "Suggest replies"),
     ("summarize", "Summarize old turns"),
     ("direct_scene", "Direct the scene (who speaks, expressions, where characters are)"),
+    ("record_changes", "Keep the books (record what each reply changed)"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -69,6 +70,7 @@ NARRATOR_ACTIONS = (
     ("relationships", '{"type": "change_relationship", "who": CHARACTER_ID, "amount": N}  how that character feels about the player shifts: usually -5 to +5, up to 15 for a moment that truly matters'),
     ("battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  a fight breaks out with these characters. The game then runs the fight itself, blow by blow, so end your reply at the moment it starts: do not narrate blows, damage or who wins'),
     ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  a character goes somewhere'),
+    ("map", '{"type": "reveal_location", "location": LOCATION_ID}  {{user}} learns that one of the places they do not know of exists and how to reach it: someone tells them, they find a map, they notice the door. It then appears on their map'),
     ("map", '{"type": "lock_travel", "reason": "..."}  {{user}} cannot leave this place for now; the game closes the map to them. The reason is one short sentence the player will see'),
     ("map", '{"type": "unlock_travel"}  {{user}} is free to travel again'),
     ("quests", '{"type": "quest_start", "quest": QUEST_ID}'),
@@ -94,8 +96,8 @@ A result saying {{user}} left one place for another means they walked out of the
 You can also use lock_travel ahead of time, the moment a scene begins that {{user}} could not walk out of. While travel is locked the game state says so. It stays locked until you use unlock_travel, so do that as soon as the story lets them go: when the scene ends, they are dismissed, they escape or talk their way out. Never leave it locked once nothing is holding them."""
 
 
-def states_reference(card):
-    """What each state means and stops, for the narrator."""
+def states_reference(card, record=True):
+    """What each state means and stops. record is whether the reader is the one who sets and clears them."""
     if not uses(card, "states"):
         return ""
     lines = []
@@ -103,20 +105,27 @@ def states_reference(card):
         blocks = state.get("blocks", [])
         stops = "stops them doing anything" if "all" in blocks else "stops: " + ", ".join(blocks) if blocks else "stops nothing"
         lines.append("- %s. %s (%s%s)" % (_named(state), state.get("description", ""), stops, "; they are out of the scene" if state.get("away") else ""))
+    duty = ("Keep them true: set a state when the story puts someone in it and clear it when the story ends it. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until you clear it."
+            if record else "The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until the story ends it.")
     return """
 
 [States]
-Each character's current states are in the game state. Keep them true: set a state when the story puts someone in it and clear it when the story ends it. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until you clear it. A character who is out of the scene cannot speak or act in it.
-""" + "\n".join(lines)
+Each character's current states are in the game state. %s A character who is out of the scene cannot speak or act in it.
+""" % duty + "\n".join(lines)
 
 
-def action_protocol(card):
-    """How the narrator reports state changes. Empty for a card that tracks nothing."""
+def action_protocol(card, record=True):
+    """The narrator's game-mechanics instructions. Empty for a card that tracks nothing.
+
+    record says who keeps the books. True: the narrator reports changes itself, in an <actions>
+    block. False: a bookkeeper reads the narrator's text afterwards, so the narrator is asked for
+    nothing but clear prose. That is far less to get right, which matters for smaller models.
+    """
     lines = [line for need, line in NARRATOR_ACTIONS if uses(card, need)]
     if not lines:
         return ""
     tracked = ", ".join(label for need, label in TRACKED if uses(card, need))
-    return """\
+    opening = """\
 [Game mechanics]
 A game engine tracks %s. It is the source of truth; the state shown to you is exact.
 
@@ -124,19 +133,91 @@ The player's message may come with engine results for things they tried to do. T
 - "done" happened. Narrate it.
 - "REJECTED" did not happen. Narrate the attempt failing for the stated reason, in the story's voice (reaching for a pouch that is empty, a door that will not open). Never narrate a rejected action as succeeding.
 Never describe {{user}} gaining, losing or using something the engine tracks unless a result or the state says so.
-
+""" % tracked
+    if record:
+        return opening + """
 When events you narrate change the tracked state, end your reply with one block:
 <actions>{"actions": [ ... ]}</actions>
 Use only these, with ids from the state. WHO is "player" or a character id.
 %s
-Do not repeat anything already listed in the engine results. Leave the block out when nothing changes. The player never sees it.%s%s""" % (tracked, "\n".join(lines), LEAVING if uses(card, "map") else "", states_reference(card))
+Do not repeat anything already listed in the engine results. Leave the block out when nothing changes. The player never sees it.%s%s""" % (
+            "\n".join(lines), LEAVING if uses(card, "map") else "", states_reference(card))
+    return opening + """
+You do not record changes yourself. A bookkeeper reads what you write and updates the game from it, so write so that what happened cannot be mistaken:
+- Say outright who gives what to whom, what is used up or spent, who is hurt and roughly how badly, who arrives and who leaves, and where {{user}} ends up.
+- When something that has been going on stops, say so in the story: {{user}} lands and is no longer flying, the ropes are cut, the sleeper wakes. The state shown to you stays as it is until your text ends it.
+- Keep to the state: {{user}} cannot spend what they do not have or be somewhere the state does not put them.
+Write only the story. No lists of changes, no notes to the bookkeeper.%s%s""" % (
+        LEAVING_PROSE if uses(card, "map") else "", states_reference(card, record=False))
+
+
+LEAVING_PROSE = """
+
+[When {{user}} leaves a place]
+A result saying {{user}} left one place for another means they walked out of the scene that was going on. Do not carry that scene on as if they were still in it. Either someone there stops them, in which case say plainly that they are stopped and still where they were, or they are gone, in which case narrate where they are now and let what they walked out on have its consequences."""
+
+
+# The bookkeeper: a helper that turns the narrator's prose into recorded changes.
+
+def bookkeeper_prompt(card, state, player_text, results, narration):
+    """state is the game as it stands after the player's own actions were applied."""
+    lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need)]
+    checks = []
+    if uses(card, "stats"):
+        checks.append("- Costs and harm. If someone casts magic, uses an ability or exerts themselves and no result above already charged for it, lower the stat that fuels it (about 1 to 3 for something small, 4 to 6 for something solid, 8 or more for something great). If someone is hurt or healed, change the stat that measures it by a fitting amount.")
+    if uses(card, "states"):
+        checks.append("- States. For every state the game state lists on anyone, decide whether it still holds at the end of the text and clear_state the ones that ended (they landed, woke, got free, came back). set_state the ones that began.")
+    if uses(card, "map"):
+        checks.append("- Places. If the player ends the text somewhere other than the Location in the game state, move them there, including back to where they were if they were stopped from leaving. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
+    if uses(card, "inventory") or uses(card, "money"):
+        checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received.")
+    if uses(card, "quests"):
+        checks.append("- Quests. An objective whose \"Met when\" has now happened is advanced; a quest whose \"Fails if\" has happened is failed; a quest the text gives the player is started.")
+    if uses(card, "levels"):
+        checks.append("- Experience, when the player has just achieved something.")
+    if uses(card, "relationships"):
+        checks.append("- Relationships, when a character's feeling toward the player has plainly shifted.")
+    if uses(card, "battle"):
+        checks.append("- Fights. If a fight breaks out in the text, start_battle with the characters fighting the player, and record nothing of the blows.")
+    system = """\
+You are the bookkeeper of a text adventure. A narrator has just written the next part of the story. Your job is to record what that text changed, so the game stays true to the story. The narrator records nothing; if you miss a change, the game is wrong from then on.
+
+Read the new text against the game state and list every change it shows, using only these actions, with ids taken from the game state. WHO is "player" or a character id.
+%s
+
+Go through these every time:
+%s
+
+Rules:
+- Record what the text shows happening, not what might happen next or what someone only talks about.
+- The engine results listed for this turn are already recorded. Do not record them again.
+- Use the exact ids from the game state. If the text names something that has no id, use the closest action that fits, or leave it out.
+- When nothing changed, the list is empty. That is a normal answer.%s
+
+Reply with JSON only: {"actions": [ ... ]}""" % ("\n".join(lines), "\n".join(checks), states_reference(card, record=False).replace("{{user}}", "the player"))
+    already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
+    user = "%s\n\n%s\n\n[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
+        describe_state(card, state), describe_quests(card, state), player_text, already, narration)
+    return system, [{"role": "user", "content": fill(card, state, user)}]
+
+
+def parse_bookkeeper(text):
+    """The actions the bookkeeper listed. They are validated like any others when applied."""
+    parsed = extract_json(text) or {}
+    return [a for a in parsed.get("actions") if isinstance(a, dict)] if isinstance(parsed.get("actions"), list) else []
 
 
 OPENING_CUE = "(The story begins.)"
 
 
 def fill(card, state, text):
-    return text.replace("{{user}}", state["actors"][PLAYER]["name"]).replace("{{currency}}", card.currency)
+    """Replaces the placeholders card authors write: {{user}} is the player's name, {{currency}}
+    the card's money, and {{char}} the character's name when the card has exactly one (with more
+    than one there is no telling who was meant, so it is left alone)."""
+    text = text.replace("{{user}}", state["actors"][PLAYER]["name"]).replace("{{currency}}", card.currency)
+    if "{{char}}" in text and len(card.characters) == 1:
+        text = text.replace("{{char}}", list(card.characters.values())[0]["name"])
+    return text
 
 
 def opening(card, state):
@@ -219,12 +300,23 @@ def _sheet(card, state, who):
     return parts
 
 
-def describe_state(card, state):
+def _unknown_places(card, state):
+    return [l for l in card.data.get("locations", []) if not knows_place(state, l["id"])]
+
+
+def describe_state(card, state, secrets=True):
+    """secrets is False for helpers that speak for the player (their suggested replies, reading
+    their intent), which must not be told about places the player has not discovered."""
     me = state["actors"][PLAYER]
     here = card.locations.get(me["location"])
     lines = ["[Current game state]", "Player: %s (player)" % me["name"]]
     if here:
-        lines.append("Location: %s. Exits: %s" % (_named(here), ", ".join(_named(l) for l in _exits(card, here["id"])) or "none"))
+        exits = [_named(l) + ("" if knows_place(state, l["id"]) else " [the player does not know of it yet]")
+                 for l in _exits(card, here["id"]) if secrets or knows_place(state, l["id"])]
+        lines.append("Location: %s. Exits: %s" % (_named(here), ", ".join(exits) or "none"))
+    if secrets and _unknown_places(card, state):
+        lines.append("Places the player does not know of yet (not on their map; reveal one with reveal_location when the story shows it to them): %s" % "; ".join(
+            "%s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state)))
     if state.get("travel_lock") is not None:
         lines.append("Travel: LOCKED for the player (%s) Use unlock_travel once nothing holds them." % state["travel_lock"])
     lines += _sheet(card, state, PLAYER)
@@ -329,10 +421,13 @@ def _turn_message(player_text, results):
 # Whatever a preset's block order says, the changing slots always travel in the tail. Putting one
 # in the prefix would make every turn pay full price for the whole conversation.
 
-VOLATILE_SLOTS = ("lorebook", "state", "quests")
+# The summary is here too. It only changes when old turns are folded into it, which already
+# forces the history to be sent afresh; keeping it out of the instructions means those, at least,
+# stay cached through a summarization.
+VOLATILE_SLOTS = ("summary", "lorebook", "state", "quests")
 
 
-def narrator_prompt(card, state, preset, player_text, results):
+def narrator_prompt(card, state, preset, player_text, results, record=True):
     """Returns (system, messages). One message carries "cache": True, marking the end of the part
     that will be identical next turn; llm.chat_request turns that into the provider's own marker.
 
@@ -353,7 +448,7 @@ def narrator_prompt(card, state, preset, player_text, results):
         "state": lambda: describe_state(card, state),
         "quests": lambda: describe_quests(card, state),
         "summary": lambda: "[Story so far]\n" + state["summary"] if state["summary"] else "",
-        "action_protocol": lambda: action_protocol(card),
+        "action_protocol": lambda: action_protocol(card, record),
     }
 
     stable, tail, history_on, below_history, has_protocol = [], [], False, False, False
@@ -369,8 +464,8 @@ def narrator_prompt(card, state, preset, player_text, results):
         text = slots[slot]() if slot else block.get("content", "")
         if text:
             (tail if slot in VOLATILE_SLOTS or (not slot and below_history) else stable).append(text)
-    if not has_protocol and action_protocol(card):
-        stable.append(action_protocol(card))
+    if not has_protocol and action_protocol(card, record):
+        stable.append(action_protocol(card, record))
 
     messages = [{"role": "user", "content": OPENING_CUE}, {"role": "assistant", "content": opening(card, state)}]
     for turn in state["history"][state.get("summarized", 0):] if history_on else []:
@@ -415,7 +510,7 @@ Rules:
 - Do not guess at things the player did not say.
 
 Reply with JSON only: {"actions": [ ... ]}. Use {"actions": []} when nothing applies."""
-    user = "%s\n\n[Last narration]\n%s\n\n[Player message]\n%s" % (describe_state(card, state), last_narration(card, state), player_text)
+    user = "%s\n\n[Last narration]\n%s\n\n[Player message]\n%s" % (describe_state(card, state, secrets=False), last_narration(card, state), player_text)
     return system, [{"role": "user", "content": user}]
 
 
@@ -439,7 +534,7 @@ def suggest_prompt(card, state, count):
 You suggest what the player could do next in a text adventure. Give %d short, distinct options, written in first person as the player ("I ask Mira about the cellar."). Mix talking, acting and exploring. Only suggest using or buying things the game state shows are available. One sentence each.
 
 Reply with JSON only: {"choices": ["...", "..."]}""" % count
-    user = "%s\n\n%s\n\n[Last narration]\n%s" % (describe_state(card, state), describe_quests(card, state), last_narration(card, state))
+    user = "%s\n\n%s\n\n[Last narration]\n%s" % (describe_state(card, state, secrets=False), describe_quests(card, state), last_narration(card, state))
     return system, [{"role": "user", "content": user}]
 
 
@@ -492,14 +587,20 @@ You are the stage director of a visual novel. The narrator's latest text is give
 - note: a few words on what they are doing or where they went, such as "tending the bar" or "rode off toward the capital".
 Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here".
 
+3. Which hidden places the player just learned of. If a list of places the player does not know of is given, name the ids of any that this text shows or tells the player about: they are told it exists, see the way to it, or are taken there. A place that is merely near is not revealed.
+
 Reply with JSON only:
 {"paragraphs": [{"n": 1, "speaker": "some_id", "expression": "neutral"}, {"n": 2, "speaker": null, "expression": null}],
- "whereabouts": [{"id": "some_id", "location": "here", "note": "..."}]}"""
+ "whereabouts": [{"id": "some_id", "location": "here", "note": "..."}],
+ "revealed": ["some_location_id"]}"""
     me = state["actors"][PLAYER]
     cast = "\n".join("- %s (id: %s). Expressions: %s. Before this text: %s" % (
         c["name"], c["id"], ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
     here = card.locations.get(me["location"])
     places = "\n[Locations]\nThe player is at %s.\n%s\n" % (_named(here), ", ".join(_named(l) for l in card.data.get("locations", []))) if here else ""
+    if _unknown_places(card, state):
+        places += "\n[Places the player does not know of yet]\n%s\n" % "\n".join(
+            "- %s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state))
     numbered = "\n\n".join("%d. %s" % (n + 1, p) for n, p in enumerate(paragraphs))
     return system, [{"role": "user", "content": "[Characters]\n%s\n%s\n[Paragraphs]\n%s" % (cast, places, numbered)}]
 
@@ -519,6 +620,12 @@ def parse_direction(text, card, count):
             known = expressions_of(card, speaker)
             direction[index] = {"speaker": speaker, "expression": expression if expression in known else known[0] if "neutral" not in known else "neutral"}
     return direction
+
+
+def parse_revealed(text, card):
+    """Location ids the director says the text revealed. Anything that is not a real location is dropped."""
+    parsed = extract_json(text) or {}
+    return [l for l in parsed.get("revealed") if isinstance(l, str) and l in card.locations] if isinstance(parsed.get("revealed"), list) else []
 
 
 def parse_whereabouts(text, card):

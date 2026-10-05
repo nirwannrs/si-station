@@ -305,13 +305,16 @@ screen navigation():
 
             textbutton _("History") action ShowMenu("history")
 
-            textbutton _("Save") action ShowMenu("save")
+            ## Not while a reply is being written: there is nothing sensible for such a save to resume to.
+            textbutton _("Save") action ShowMenu("save") sensitive (not runtime.busy)
 
         textbutton _("Load") action ShowMenu("load")
 
         textbutton _("Preferences") action ShowMenu("preferences")
 
         textbutton _("Models") action ShowMenu("models")
+
+        textbutton _("Parameters") action ShowMenu("parameters")
 
         textbutton _("Card info") action ShowMenu("card_info")
 
@@ -608,7 +611,11 @@ screen save():
 
     tag menu
 
-    use file_slots(_("Save"))
+    if runtime.busy:
+        use game_menu(_("Save")):
+            text _("Saving is paused while the story is being written. Return to the game, and save once the reply has arrived.")
+    else:
+        use file_slots(_("Save"))
 
 
 screen load():

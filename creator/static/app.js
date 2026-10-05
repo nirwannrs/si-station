@@ -560,6 +560,8 @@ const SECTIONS = [
       { t: "text", k: "id", label: "Id" },
       { t: "area", k: "description", label: "Description", rows: 2 },
       { t: "asset", k: "background", label: "Background picture", when: visual, path: (l, ext) => `assets/bg/${l.id || "location"}${ext}` },
+      { t: "bool", k: "hidden", label: "Hidden at the start", redraw: false,
+        help: "Not on the player's map until the story reveals it: they are told of it, find the way, or are taken there. Where the player starts is never hidden." },
       { t: "checks", k: "connections", label: "Leads to", options: (l) => O.locations().filter(([id]) => id !== l.id), empty: "Add another location to connect this one to." },
     ] },
   ] },

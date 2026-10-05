@@ -8,15 +8,18 @@ default persistent.llm = None
 default skip_resolve = False
 ## The player's choice of what Enter does in the story input: False sends, True starts a new line.
 default persistent.enter_newline = False
+## The player's own generation settings, set on the Parameters screen. None until first opened or used,
+## then a copy of the preset's values that the player can change. Numbers typed into boxes are kept as text.
+default persistent.params = None
+## Context sizes learned from providers' model lists, kept so a model's limit is known without asking again.
+## "provider|address|model" -> tokens.
+default persistent.model_contexts = {}
 ## Why the last turn failed, or None.
 default turn_error = None
 ## What the player typed for a turn that failed, so they do not have to retype it.
 default draft = ""
 ## Suggested replies for the current turn.
 default suggestions = []
-## State as it was before the turn in progress, and whether one is in progress.
-default turn_backup = None
-default turn_running = False
 ## The player folded the reply panel away to see the stage.
 default recap_hidden = False
 ## Character id speaking right now, so the stage can dim everyone else. None between lines.
@@ -58,6 +61,12 @@ init python:
         tests = {}
         # what the most recent calls cost, newest last: {"what", "input", "cached", "written", "output"}
         usage = []
+        # whether the last story reply stopped at the response length limit
+        cut_short = False
+        # True while a turn is being worked out. Saving is switched off for that long.
+        busy = False
+        # the model whose context size is being looked up right now, so it is only asked for once
+        context_lookup = None
 
     runtime = Runtime()
 
@@ -131,9 +140,17 @@ init python:
 
     def llm_call(slot, system, messages, sampling, threaded=False, what="story"):
         connection = slot_connection(slot)
+        if store.game_state is not None and store.card_name:
+            ## Every prompt, whichever job built it, has the card's placeholders filled in here, so a
+            ## raw {{user}} can never reach a model. Filling twice changes nothing.
+            card, state = current_card(), store.game_state
+            system = aig_prompt.fill(card, state, system)
+            messages = [dict(m, content=aig_prompt.fill(card, state, m["content"])) for m in messages]
         request = aig_llm.chat_request(connection, llm_settings()["models"][slot]["model"].strip(), system, messages, sampling)
         data = http_json(request, CHAT_TIMEOUT, threaded)
         runtime.usage = runtime.usage[-39:] + [dict(aig_llm.chat_usage(connection["provider"], data), what=what)]
+        if what == "story":
+            runtime.cut_short = aig_llm.chat_cut_short(connection["provider"], data)
         return aig_llm.chat_text(connection["provider"], data)
 
     def run_helper(task, prompt, sampling=HELPER_SAMPLING, threaded=False):
@@ -159,6 +176,16 @@ init python:
             lines.append(line("Small tasks (%d calls)" % len(helpers), helpers))
         return lines
 
+    def usage_brief():
+        """One short line about the last story reply's cost, for the play screen. Empty before the first reply."""
+        story = [c for c in runtime.usage if c["what"] == "story"]
+        if not story:
+            return ""
+        sent, cached = story[-1]["input"], story[-1]["cached"]
+        if not sent:
+            return "Tokens: not reported by this provider"
+        return "Last reply: %s tokens sent, %d%% from cache" % ("{:,}".format(sent), round(100.0 * cached / sent))
+
     def run_in_background(work, done):
         """Calls work() off the main thread, then done(result) on it. work must not touch the display."""
         def body():
@@ -181,21 +208,86 @@ init python:
 
     ## The turn.
 
+    ## Loading a save does not always resume where the player was looking. Ren'Py resumes at the last
+    ## statement that paused, and a turn pauses many times while it waits for the model, so a save made
+    ## at the input screen could resume inside the turn before it and play that turn a second time.
+    ## Two things prevent that. open_turn makes the input screen itself the place to resume. And the
+    ## notes of what is in progress are kept inside game_state, not in store variables: Ren'Py winds
+    ## store variables back to the start of the statement on load, but leaves game_state as saved.
+
+    def open_turn():
+        """Marks that the game is waiting for the player, and makes this the point a save resumes from."""
+        store.game_state["open"] = True
+        renpy.checkpoint()
+
+    def restore_turn(state):
+        """Puts the state back to how it was before the turn in progress began."""
+        before = state["restore_point"]
+        state.clear()
+        state.update(before)
+
+    def set_busy(on):
+        """Switches saving off while the story is being written, and back on when the reply is in.
+        A save made halfway through a turn has nothing sensible to resume to."""
+        runtime.busy = on
+        store._autosave = not on
+
+    def undo_turn():
+        """Takes back the last turn: the story, and everything it changed, go back to how they were
+        before it, and what the player typed is put back in the input box to edit or resend.
+
+        Only one turn can be taken back this way. Without a stored copy to return to (a save from
+        before this existed, or a second undo in a row) the last turn is just removed from the story.
+        """
+        state = store.game_state
+        if not state["history"]:
+            return
+        typed = state["history"][-1]["player"]
+        before = state.get("undo_point")
+        if before is not None:
+            state.clear()
+            state.update(before)
+        else:
+            state["history"].pop()
+            state["turn"] = max(0, state["turn"] - 1)
+            state["summarized"] = min(state.get("summarized", 0), len(state["history"]))
+        state["open"] = True
+        store.suggestions = []
+        store.turn_error = None
+        screen = renpy.get_screen("turn_input")
+        if screen is not None:
+            screen.scope["typed"] = "" if typed.startswith("(") else typed     # "(The fight is over.)" and the like are not the player's words
+        renpy.restart_interaction()
+
     def play_turn(text, resolve=True):
-        """One full turn: work out what the player attempts, apply it, narrate, apply what the narration changed.
+        """One full turn, with saving switched off until it is over. See run_turn."""
+        set_busy(True)
+        try:
+            run_turn(text, resolve)
+        finally:
+            set_busy(False)
+
+    def run_turn(text, resolve):
+        """Works out what the player attempts, applies it, narrates, and applies what the narration changed.
 
         resolve is False when the game already knows what the player did (they pressed a button, or
         a fight just ended), so there is nothing to work out from the text.
 
         On failure the state is put back as it was and turn_error says why.
         """
-        if store.turn_running:
-            # Re-entered after loading a save made while this turn was waiting on the model.
-            store.game_state = store.turn_backup
-        store.turn_backup = copy.deepcopy(store.game_state)
-        store.turn_running = True
         store.turn_error = None
-        card, state, preset = current_card(), store.game_state, active_preset()
+        state = store.game_state
+        if state.get("restore_point") is not None:
+            # Reached again after loading a save made while this turn was waiting on the model: start it over.
+            restore_turn(state)
+        if not state.get("open", True):
+            # Reached again after loading a save made once this turn was already played. Nothing to do.
+            return
+        ## The copy must not carry older copies inside it, or saves would grow with every turn.
+        state["restore_point"] = None
+        earlier_undo = state.pop("undo_point", None)
+        state["restore_point"] = copy.deepcopy(state)
+        card, preset = current_card(), active_preset()
         try:
             ## A card with nothing the player can act on skips the call that works out their actions.
             attempts = []
@@ -203,26 +295,44 @@ init python:
                 attempts = aig_prompt.parse_resolver(run_helper("resolve_actions", aig_prompt.resolver_prompt(card, state, text)), card)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
 
-            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results)
-            reply = llm_call("main", system, messages, preset.get("sampling"))
+            keeper = bookkeeping()
+            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper)
+            reply = llm_call("main", system, messages, story_sampling())
             narration, world_actions = aig_prompt.parse_narration(reply)
+            narration = aig_prompt.fill(card, state, narration)     # in case the model wrote the placeholder back
             if not narration:
                 raise aig_llm.LLMError("The model returned no story text.")
+            if keeper:
+                ## The story model only wrote prose. A second, narrowly focused call reads it and records
+                ## what changed. If that call fails, anything the story model reported by itself is used.
+                try:
+                    world_actions = aig_prompt.parse_bookkeeper(run_helper("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration)))
+                except aig_llm.LLMError:
+                    pass
             results = results + aig_actions.apply_actions(card, state, world_actions)
         except aig_llm.LLMError as e:
-            store.game_state = store.turn_backup
+            restore_turn(state)
+            state["open"] = False
+            state["undo_point"] = earlier_undo
             store.turn_error = str(e)
             store.draft = text
-            store.turn_running = False
             return
 
         state["pending_results"] = []
-        state["history"].append({"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results],
-                                 "narration": narration, "direction": direct_scene(card, state, narration)})
+        turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results],
+                "narration": narration, "direction": direct_scene(card, state, narration)}
+        if runtime.cut_short:
+            ## Kept apart from the results: it is for the player, and is never sent to the model.
+            turn["notice"] = ("This reply was cut off at the response length limit (%d tokens), so it may end mid-sentence and "
+                              "anything it changed at the very end may be missing. Raise Response length in Menu > Parameters.") % story_sampling()["max_tokens"]
+        ## From here the turn counts as played: nothing below may pause before these three lines are done.
+        state["history"].append(turn)
         state["turn"] += 1
+        state["open"] = False
+        ## What the turn started from becomes what Undo goes back to.
+        state["undo_point"], state["restore_point"] = state["restore_point"], None
         store.game_log = (store.game_log + results)[-30:]
         store.draft = ""
-        store.turn_running = False
         summarize_if_long(card, state, preset)
 
     def direct_scene(card, state, narration):
@@ -236,6 +346,9 @@ init python:
         except aig_llm.LLMError:
             reply = ""
         aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card))
+        ## Places the text showed the player go on their map. The narrator hears of it next turn.
+        for place in aig_state.reveal(card, state, aig_prompt.parse_revealed(reply, card)):
+            state["pending_results"].append({"ok": True, "message": "The map now shows %s." % place})
         direction = aig_prompt.parse_direction(reply, card, len(paragraphs))
         ## Anyone who speaks in the scene is someone the player has now met.
         aig_state.meet(state, [d["speaker"] for d in direction if d["speaker"]])
@@ -243,7 +356,11 @@ init python:
 
     def direct_opening():
         state = store.game_state
-        state["opening_direction"] = direct_scene(current_card(), state, aig_prompt.opening(current_card(), state))
+        set_busy(True)
+        try:
+            state["opening_direction"] = direct_scene(current_card(), state, aig_prompt.opening(current_card(), state))
+        finally:
+            set_busy(False)
 
     def scene_lines(turn=None):
         """(speaker id or None, expression, paragraph) for a turn, or for the opening when turn is None."""
@@ -326,16 +443,69 @@ init python:
 
         The turns stay in history so the player can still read them.
         """
-        limit = preset.get("context", {}).get("summarize_after_turns", 0)
-        seen = state["history"][state.get("summarized", 0):]
-        if not limit or len(seen) <= limit:
-            return
-        old = seen[:limit // 2]
+        limit = param_number("summarize_after_turns", 0, 1000, 20)
+        ## Leave room in the context for the reply itself.
+        budget = param_number("max_context_tokens", 2000, 2000000, 16000) - story_sampling()["max_tokens"]
+        for attempt in range(3):
+            seen = state["history"][state.get("summarized", 0):]
+            too_many = limit and len(seen) > limit
+            too_big = len(seen) > 2 and aig_llm.estimate_tokens(*aig_prompt.narrator_prompt(card, state, preset, "", [])) > budget
+            if not (too_many or too_big):
+                return
+            old = seen[:max(1, len(seen) // 2)]
+            try:
+                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old))
+            except aig_llm.LLMError:
+                return
+            state["summarized"] = state.get("summarized", 0) + len(old)
+
+    ## Parameters: the player's generation settings.
+
+    PARAM_SLIDERS = [
+        ("temperature", _("Temperature"), 0.0, 2.0, 0.05, _("How adventurous the writing is. Higher is more varied and surprising, lower is steadier and more predictable.")),
+        ("top_p", _("Top P"), 0.0, 1.0, 0.01, _("Keeps only the most likely words up to this share. Lower is safer and plainer. Usually left alone if you change temperature.")),
+        ("top_k", _("Top K"), 0, 200, 1, _("Keeps only this many of the most likely words at each step. Not every provider accepts it.")),
+        ("frequency_penalty", _("Frequency penalty"), -2.0, 2.0, 0.05, _("Above zero discourages repeating the same words often.")),
+        ("presence_penalty", _("Presence penalty"), -2.0, 2.0, 0.05, _("Above zero nudges the model toward new subjects.")),
+    ]
+    PARAM_FALLBACKS = {"temperature": 1.0, "top_p": 1.0, "top_k": 40, "frequency_penalty": 0.0, "presence_penalty": 0.0}
+
+    def reset_params():
+        """Sets the player's parameters back to what the preset ships with."""
+        sampling, context = active_preset().get("sampling", {}), active_preset().get("context", {})
+        fresh = {"bookkeeper": True, "max_tokens": str(sampling.get("max_tokens", 2000)), "max_context_tokens": str(context.get("max_context_tokens", 16000)),
+                 "summarize_after_turns": str(context.get("summarize_after_turns", 20)), "use": {}}
+        for key, fallback in PARAM_FALLBACKS.items():
+            fresh[key] = sampling.get(key, fallback)
+            fresh["use"][key] = key in sampling
+        persistent.params = fresh
+        input_fields.clear()
+        renpy.restart_interaction()
+
+    def params():
+        if persistent.params is None:
+            reset_params()
+        return persistent.params
+
+    def param_number(key, low, high, fallback):
+        """A typed number from the Parameters screen, kept within sensible bounds. Nonsense falls back."""
         try:
-            state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old))
-        except aig_llm.LLMError:
-            return
-        state["summarized"] = state.get("summarized", 0) + len(old)
+            return max(low, min(high, int(str(params().get(key, "")).strip())))
+        except ValueError:
+            return fallback
+
+    def bookkeeping():
+        """Whether a bookkeeper records each reply's changes, instead of the story model reporting them itself."""
+        return params().get("bookkeeper", True)
+
+    def story_sampling():
+        """What the story model is asked for. A setting the player has not switched on is left to the provider."""
+        chosen = params()
+        sampling = {"max_tokens": param_number("max_tokens", 50, 200000, 2000)}
+        for key in PARAM_FALLBACKS:
+            if chosen["use"].get(key):
+                sampling[key] = chosen[key]
+        return sampling
 
     def start_suggestions():
         """Fetches suggested replies in the background; the input screen fills in when they arrive."""
@@ -369,9 +539,59 @@ init python:
         set_status(runtime.models, slot, "Loading models...")
 
         def done(result):
+            if not isinstance(result, Exception):
+                remember_contexts(slot, result)
             set_status(runtime.models, slot, str(result) if isinstance(result, Exception) else (aig_llm.model_ids(result) or "The provider listed no models."))
 
         run_in_background(lambda: http_json(request, 30, threaded=True), done)
+
+    ## Context size that follows the model.
+
+    def context_key(slot="main", model=None):
+        connection = slot_connection(slot)
+        return "%s|%s|%s" % (connection["provider"], (connection.get("base_url") or "").strip(), model or llm_settings()["models"][slot]["model"].strip())
+
+    def remember_contexts(slot, listing):
+        for model, tokens in aig_llm.model_contexts(listing).items():
+            persistent.model_contexts[context_key(slot, model)] = tokens
+
+    def sync_context_size(ask=True):
+        """Sets Context size to the most the chosen story model can take, whenever that model changes.
+
+        The limit comes from the provider's model list. If the list does not say (many custom and
+        local endpoints do not), the size is left as it is and the Parameters screen says so.
+        """
+        chosen = params()
+        key = context_key()
+        if not chosen.get("auto_context", True) or key.endswith("|"):
+            return
+        known = persistent.model_contexts.get(key)
+        if known:
+            chosen["max_context_tokens"], chosen["context_for"], chosen["context_unknown"] = str(known), key, False
+            renpy.restart_interaction()
+        elif ask and chosen.get("context_for") != key and runtime.context_lookup != key:
+            # Not seen in a model list yet (the id was typed in): ask the provider once, quietly.
+            runtime.context_lookup = key
+            try:
+                request = aig_llm.models_request(slot_connection("main"))
+            except aig_llm.LLMError:
+                return
+
+            def done(result):
+                if not isinstance(result, Exception):
+                    remember_contexts("main", result)
+                if context_key() == key:
+                    if key in persistent.model_contexts:
+                        sync_context_size(ask=False)
+                    else:
+                        ## A number that was set from another model's limit may be far more than this one can
+                        ## take, so it is not kept. A number the player typed themselves is left alone.
+                        if chosen.get("context_for") and not chosen.get("context_unknown"):
+                            chosen["max_context_tokens"] = str(active_preset().get("context", {}).get("max_context_tokens", 16000))
+                        chosen["context_for"], chosen["context_unknown"] = key, True
+                        renpy.restart_interaction()
+
+            run_in_background(lambda: http_json(request, 30, threaded=True), done)
 
     def test_model(slot):
         set_status(runtime.tests, slot, "Testing...")
@@ -433,6 +653,8 @@ screen turn_text(turn=None):
             text rich(paragraph)
         for result in (turn["results"] if turn else []):
             text esc(result["message"]) size 24 color ("#9fd89f" if result["ok"] else "#ff8080")
+        if turn and turn.get("notice"):
+            text esc(turn["notice"]) size 24 color "#ffb070"
 
 
 ## Where the player answers. The last response stays readable above the input unless the player hides it.
@@ -522,7 +744,11 @@ screen turn_input():
                     spacing 14
                     text (_("Enter starts a new line, Shift+Enter sends.") if persistent.enter_newline else _("Enter sends, Shift+Enter starts a new line.")) size 22 color "#999999" yalign 0.5
                     textbutton _("Switch") action Function(toggle_enter_key) text_size 22 yalign 0.5
+                    if game_state["history"]:
+                        textbutton _("Undo last turn") action Function(undo_turn) text_size 22 yalign 0.5
                     text _("*italic*  **bold**") size 22 color "#999999" yalign 0.5
+                    if usage_brief():
+                        text esc(usage_brief()) size 22 color "#999999" yalign 0.5
 
 
 ## The conversation so far, oldest first. Used by the History menu.
@@ -537,10 +763,85 @@ screen story_log(turns=HISTORY_MENU_TURNS):
             use turn_text(turn)
 
 
+## Parameters.
+
+screen parameters():
+    tag menu
+
+    on "show" action Function(sync_context_size)
+
+    use game_menu(_("Parameters"), scroll="viewport"):
+        $ chosen = params()
+
+        vbox:
+            spacing 26
+            text _("How the story model writes. These are yours: they apply on this device, to every card.") size 24
+
+            vbox:
+                spacing 6
+                label _("Record-keeping")
+                text _("Who updates health, mana, items, places, states and quests after each reply. With the bookkeeper on, the story model only writes the story, and a second call (the \"Keep the books\" small task) reads it and records what changed. This is much more dependable with smaller story models, at the cost of one more small call per turn. With it off, the story model must report its own changes, which the strongest models do well and others often forget.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Use a bookkeeper") action ToggleDict(chosen, "bookkeeper", True, False) selected chosen.get("bookkeeper", True)
+
+            vbox:
+                spacing 6
+                label _("Response length")
+                text _("The most the model may write in one reply, in tokens (a token is about three quarters of a word). If replies stop mid-sentence, raise this. Models that think before answering spend part of it on thinking, so give those 3000 or more.") size 24
+                use settings_input(_("Tokens"), chosen, "max_tokens", digits=True)
+
+            vbox:
+                spacing 6
+                label _("Context size")
+                text _("How much the model is sent each turn, in tokens: the card, the story so far and the game state. When the story outgrows it, the oldest turns are folded into a summary. Set it to what your model can take; larger remembers more and costs more.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Match the most the story model can take") action [ToggleDict(chosen, "auto_context", True, False), Function(sync_context_size)] selected chosen.get("auto_context", True)
+                use settings_input(_("Tokens"), chosen, "max_context_tokens", digits=True)
+                if chosen.get("auto_context", True):
+                    if chosen.get("context_unknown") and chosen.get("context_for") == context_key():
+                        text _("This provider does not say how much this model can take, so the number above is a cautious default. If you know the model's limit, type it in.") size 22 color "#ffb070"
+                    elif chosen.get("context_for") == context_key():
+                        text esc("Set to the limit of %s. It follows the model whenever you choose a different one." % context_key().split("|")[-1]) size 22 color "#999999"
+                    else:
+                        text _("It will be set from the provider's model list when you choose a story model.") size 22 color "#999999"
+                use settings_input(_("Turns"), chosen, "summarize_after_turns", digits=True)
+                text _("Also summarize once this many turns have built up, whichever comes first. 0 goes by size only.") size 22 color "#999999"
+
+            for key, title, low, high, step, help in PARAM_SLIDERS:
+                vbox:
+                    spacing 6
+                    label title
+                    text help size 24
+                    vbox:
+                        style_prefix "check"
+                        xsize 1100
+                        textbutton _("Set it myself") action ToggleDict(chosen["use"], key)
+                    if chosen["use"].get(key):
+                        hbox:
+                            spacing 24
+                            bar value DictValue(chosen, key, range=high - low, offset=low, step=step) xsize 700 yalign 0.5
+                            text (("%d" if isinstance(step, int) else "%.2f") % chosen[key]) yalign 0.5
+                    else:
+                        text _("Left to the provider's default.") size 24 color "#999999"
+
+            vbox:
+                spacing 6
+                text _("With Anthropic chosen directly as the provider, temperature, Top P and Top K are not sent, because current Claude models reject them, and the response length is never set below 16,000 so that thinking does not use it all up.") size 22 color "#999999"
+                textbutton _("Reset to the preset's values") action Function(reset_params)
+
+
 ## Models.
 
 screen models():
     tag menu
+
+    ## A model id typed by hand is noticed when the player leaves this screen.
+    on "hide" action Function(sync_context_size)
+    on "replaced" action Function(sync_context_size)
 
     use game_menu(_("Models"), scroll="viewport"):
         $ settings = llm_settings()
@@ -551,12 +852,14 @@ screen models():
 
             use model_slot("main", _("Main model"), _("Writes the story."))
 
-            if usage_lines():
-                vbox:
-                    spacing 6
-                    label _("Token use")
-                    for line in usage_lines():
-                        text esc(line) size 24
+            vbox:
+                spacing 6
+                label _("Token use")
+                for line in usage_lines():
+                    text esc(line) size 24
+                if not usage_lines():
+                    text _("Nothing yet. This fills in once the story model has replied, and starts again each time the game is launched.") size 24
+                else:
                     text _("The first reply after starting or loading is never cached. A high percentage from the second reply on means prompt caching is working.") size 22 color "#999999"
 
             vbox:
@@ -662,25 +965,27 @@ screen model_picker(slot):
                     vbox:
                         for model in matches[:150]:
                             textbutton esc(model):
-                                action [SetDict(entry, "model", model), Hide("model_picker")]
+                                action [SetDict(entry, "model", model), Function(sync_context_size), Hide("model_picker")]
                                 selected (entry["model"] == model)
                                 text_size 26
 
         textbutton _("Close") action Hide("model_picker") xalign 1.0 yalign 1.0
 
 
-screen settings_input(title, target, key, secret=False, hint=None):
+screen settings_input(title, target, key, secret=False, hint=None, digits=False):
     $ field = settings_field(target, key)
     hbox:
         spacing 20
         text title yalign 0.5 min_width 180
         button:
-            xsize 900
+            xsize (300 if digits else 900)
             padding (16, 10)
             background "#00000080"
             action field.Toggle()
             if secret:
                 input value field mask "*" copypaste True
+            elif digits:
+                input value field allow "0123456789" length 7
             else:
                 input value field copypaste True
         if hint and not target[key]:

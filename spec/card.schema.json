@@ -251,6 +251,7 @@
           "name": { "type": "string" },
           "description": { "type": "string" },
           "background": { "$ref": "#/$defs/asset" },
+          "hidden": { "type": "boolean", "default": false, "description": "Not on the player's map at the start. The story reveals it: the narrator or the scene director puts it on the map once the player is told of it, sees the way, or is taken there. The start location is never hidden." },
           "connections": { "type": "array", "items": { "$ref": "#/$defs/id" } }
         }
       }

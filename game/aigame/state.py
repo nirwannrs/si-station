@@ -109,6 +109,12 @@ def new_game(card, persona=None):
         "game_over": False,
         # why the player may not travel right now, when the narrator has closed the map to them; else None
         "travel_lock": None,
+        # True while the game waits for the player's next message; False once that message has been played
+        "open": True,
+        # a copy of this whole state from just before the turn now in progress, or None between turns
+        "restore_point": None,
+        # ids of the locations on the player's map. Places the card marks hidden join it when the story reveals them.
+        "revealed": [l["id"] for l in card.data.get("locations", []) if not l.get("hidden") or l["id"] == card.data["world"].get("start_location")],
         # who speaks in each paragraph of the card's opening, filled in once by the scene director
         "opening_direction": [],
         # character id -> the expression they last wore
@@ -202,6 +208,21 @@ def reconcile(card, state):
     state["shops"] = shops
     return notes
 
+
+
+def knows_place(state, location_id):
+    """Whether a location is on the player's map."""
+    return location_id in state["revealed"]
+
+
+def reveal(card, state, location_ids):
+    """Puts hidden locations on the player's map. Returns the names of the ones that were new to them."""
+    new = []
+    for location_id in location_ids:
+        if location_id in card.locations and location_id not in state["revealed"]:
+            state["revealed"].append(location_id)
+            new.append(card.locations[location_id]["name"])
+    return new
 
 
 def meet(state, who):

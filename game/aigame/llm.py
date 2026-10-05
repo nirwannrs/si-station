@@ -157,6 +157,23 @@ def chat_text(provider, data):
     return text.strip()
 
 
+def chat_cut_short(provider, data):
+    """True when the reply stopped because it reached the response length limit, not because it was finished."""
+    if not isinstance(data, dict):
+        return False
+    if provider == "anthropic":
+        return data.get("stop_reason") == "max_tokens"
+    try:
+        return data["choices"][0].get("finish_reason") == "length"
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
+
+
+def estimate_tokens(system, messages):
+    """A rough size for a prompt, erring high: about one token per three and a half characters."""
+    return int((len(system) + sum(len(m["content"]) for m in messages)) / 3.5)
+
+
 def chat_usage(provider, data):
     """How the prompt was billed: {"input": all prompt tokens, "cached": of those, read from cache at a
     fraction of the price, "written": of those, newly stored in the cache, "output"}. Zeros where the provider says nothing."""
@@ -182,7 +199,31 @@ def chat_usage(provider, data):
 
 
 def models_request(connection):
-    return {"url": base_url(connection) + "/models", "headers": _headers(connection)}
+    # Nano-GPT only includes each model's context size when asked for the detailed list.
+    detail = "?detailed=true" if connection["provider"] == "nanogpt" else ""
+    return {"url": base_url(connection) + "/models" + detail, "headers": _headers(connection)}
+
+
+def model_contexts(data):
+    """Model id -> how many tokens that model can be sent, for the models whose listing says.
+
+    Providers name this differently: OpenRouter and Nano-GPT say context_length, Anthropic says
+    max_input_tokens, and local servers use a few names of their own. Many OpenAI-style endpoints
+    do not say at all.
+    """
+    entries = data.get("data") if isinstance(data, dict) else data
+    found = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            continue
+        nested = [entry.get(k) for k in ("top_provider", "meta")]
+        candidates = [entry.get(k) for k in ("context_length", "max_input_tokens", "context_window", "max_context_length", "loaded_context_length")]
+        candidates += [n.get(k) for n in nested if isinstance(n, dict) for k in ("context_length", "n_ctx_train", "n_ctx")]
+        for value in candidates:
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 1024:
+                found[entry["id"]] = int(value)
+                break
+    return found
 
 
 def model_ids(data):
