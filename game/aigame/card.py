@@ -1,9 +1,13 @@
 """Loads and checks cards.
 
 A card is a .sicard file or, while it is being made, a plain folder with card.json at its root.
-A .sicard is that folder zipped and then sealed: encrypted and signed with a key built into the
-engine. The key ships with the game, so this keeps cards from being opened with ordinary tools;
-it cannot keep out someone determined to read the engine.
+A .sicard is that folder zipped and then sealed with the key below. Sealing keeps a card in one
+file that ordinary tools do not open, and catches files that were damaged or edited afterwards.
+
+It is a starting point, not strong protection. The key is part of this open-source code, so
+anyone who reads the code can open any card. A fork that wants more can change seal() and
+unseal() (and bump the container version in _MAGIC) without touching anything else: the rest of
+the engine only ever sees the unsealed zip.
 """
 
 import hashlib
@@ -134,6 +138,8 @@ def _index(objects):
 
 # The .sicard container: MAGIC, a 16-byte nonce, a 32-byte signature, then the encrypted zip.
 # The last byte before the newline in MAGIC is the container version.
+# _KEY is public, like the rest of this file: every copy of SI-Station uses the same one, which is
+# what lets a card made anywhere be played anywhere.
 EXTENSION = ".sicard"
 _MAGIC = b"SICARD\x01\n"
 _KEY = bytes.fromhex("0a6f28f8d994389ad59d20fd83c4b7bf9963c766466a1a8ba54d902b0bf0382e")
