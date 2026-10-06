@@ -33,6 +33,9 @@
 
 # Packed cards: made from the card folders with tools/pack_card.py or the creator's Export.
 /exports/
+
+# Presets moved to the trash in the creator.
+/presets/.trash/
 /samples/
 
 # Python and macOS leftovers, and per-machine assistant settings.

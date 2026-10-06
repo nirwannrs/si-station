@@ -27,6 +27,58 @@ let previewCard = "";
 const openItems = new Set();     // which list entries are unfolded, by path
 const autoIds = new WeakSet();   // entries made this session whose id still follows their name
 
+// ---------- how the page looks
+//
+// Two choices, kept in this browser: light, dark or whatever the system uses; and whether text
+// boxes grow to show all of their text or stay a few lines tall.
+
+const looks = { theme: "system", boxes: "full" };
+try { looks.theme = localStorage.getItem("si.theme") || looks.theme; looks.boxes = localStorage.getItem("si.boxes") || looks.boxes; } catch (error) { /* private window: the choices last for this visit */ }
+looks.theme = new URLSearchParams(location.search).get("theme") || looks.theme;      // ?theme=dark opens the page that way
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+function applyLooks() {
+  const root = document.documentElement;
+  root.dataset.theme = looks.theme === "dark" || (looks.theme === "system" && systemDark.matches) ? "dark" : "light";
+  root.dataset.boxes = looks.boxes;
+  try { localStorage.setItem("si.theme", looks.theme); localStorage.setItem("si.boxes", looks.boxes); } catch (error) { /* see above */ }
+  fitAll();
+}
+systemDark.addEventListener("change", applyLooks);
+
+// A text box as tall as its text, so nothing has to be scrolled inside it. One that is not on
+// screen yet (inside a folded entry) has no size to measure and is fitted when it is unfolded.
+function fit(box) {
+  box.style.height = "auto";
+  if (looks.boxes === "full" && box.scrollHeight) box.style.height = box.scrollHeight + 2 + "px";
+}
+const fitAll = (within = document) => { for (const box of within.querySelectorAll("textarea")) fit(box); };
+document.addEventListener("input", (event) => { if (event.target.tagName === "TEXTAREA") fit(event.target); });
+document.addEventListener("toggle", (event) => { if (event.target.open) fitAll(event.target); }, true);
+window.addEventListener("resize", () => fitAll());
+new MutationObserver((changes) => {
+  if (changes.some((change) => [...change.addedNodes].some((node) => node.nodeType === 1 && (node.tagName === "TEXTAREA" || node.querySelector("textarea"))))) requestAnimationFrame(() => fitAll());
+}).observe(document.getElementById("app"), { childList: true, subtree: true });
+
+// The two choices as controls, for the bar at the top of every page.
+function looksControls() {
+  const theme = document.createElement("select");
+  for (const [value, label] of [["system", "Follow system"], ["light", "Light"], ["dark", "Dark"]]) theme.append(new Option(label, value));
+  theme.value = looks.theme;
+  theme.title = "Light or dark";
+  theme.addEventListener("change", () => { looks.theme = theme.value; applyLooks(); });
+  const boxes = document.createElement("button");
+  boxes.type = "button";
+  boxes.title = "Whether text boxes grow to show all of their text";
+  const label = () => { boxes.textContent = looks.boxes === "full" ? "Text boxes: full" : "Text boxes: short"; };
+  boxes.addEventListener("click", () => { looks.boxes = looks.boxes === "full" ? "short" : "full"; label(); applyLooks(); });
+  label();
+  const holder = document.createElement("div");
+  holder.className = "looks";
+  holder.append(theme, boxes);
+  return holder;
+}
+
 // ---------- small helpers
 
 function el(tag, attrs = {}, ...kids) {
@@ -1016,7 +1068,7 @@ async function openPreset(id, wanted, entry, preview) {
     app.replaceChildren(el("div", { class: "editor" },
       el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards and presets" }), el("h1"), el("span", { class: "status", text: presetBuiltin ? "Read only" : "Saved" }),
         el("span", { class: "badge" }),
-        !presetBuiltin && el("button", { class: "button", type: "button", text: "Duplicate", onclick: () => copyPreset(presetId, (preset.name || "Preset") + " copy").catch((error) => alert(error.message)) })),
+        !presetBuiltin && el("button", { class: "button", type: "button", text: "Duplicate", onclick: () => copyPreset(presetId, (preset.name || "Preset") + " copy").catch((error) => alert(error.message)) }), looksControls()),
       el("nav", { class: "sidebar" }), el("main", { class: "main" })));
     showProblems();
   }
@@ -1073,7 +1125,7 @@ async function openEditor(project, wanted) {
     app.replaceChildren(el("div", { class: "editor" },
       el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards and presets" }), el("h1"), el("span", { class: "status", text: "Saved" }),
         el("button", { class: "badge", onclick: () => { location.hash = `#/card/${pid}/export`; } }),
-        el("a", { class: "button", href: `#/card/${project}/export`, text: "Export" })),
+        el("a", { class: "button", href: `#/card/${project}/export`, text: "Export" }), looksControls()),
       el("nav", { class: "sidebar" }), el("main", { class: "main" })));
     showProblems();
   }
@@ -1109,7 +1161,7 @@ async function openHome() {
     } catch (problem) { error.textContent = problem.message; picker.value = ""; }
   });
   app.replaceChildren(el("div", { class: "home" },
-    el("header", {}, el("h1", { text: "Card Creator" }), el("span", { class: "brand", text: "SI-Station" })),
+    el("header", {}, el("h1", { text: "Card Creator" }), el("span", { class: "brand", text: "SI-Station" }), looksControls()),
     el("div", { class: "cards" }, projects.map((p) => el("div", { class: "card-tile", onclick: () => { location.hash = `#/card/${p.id}/info`; } },
       el("h3", { text: p.title }), p.author && el("span", { class: "muted small", text: "by " + p.author }), el("span", { class: "small", text: p.description }),
       el("div", { class: "row" }, el("span", { class: "small " + (p.problems ? "error" : "muted"), text: p.problems ? `${p.problems} to fix` : "Ready to play" }),

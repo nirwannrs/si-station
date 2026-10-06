@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SI-Station Card Creator</title>
 <link rel="stylesheet" href="style.css">
+<script>
+// Set before the page is drawn, so a dark page never flashes white. app.js keeps it up to date.
+(function () {
+  var theme = "system", boxes = "full";
+  try { theme = localStorage.getItem("si.theme") || theme; boxes = localStorage.getItem("si.boxes") || boxes; } catch (e) {}
+  theme = new URLSearchParams(location.search).get("theme") || theme;      // ?theme=dark opens the page that way
+  var dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.boxes = boxes;
+})();
+</script>
 </head>
 <body>
 <div id="app"></div>
