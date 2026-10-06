@@ -27,7 +27,7 @@ from aigame.card import BUILTIN_STATES, CAPABILITIES, EXTENSION, CardError, chec
 from aigame import llm as game_llm  # noqa: E402
 from aigame import prompt as game_prompt  # noqa: E402
 from aigame.state import new_game  # noqa: E402
-from aigame.wording import BUILTIN_PROMPTS, builtin_prompt, check_preset  # noqa: E402
+from aigame.wording import BUILTIN_PROMPTS, PresetError, builtin_prompt, check_preset, take_preset  # noqa: E402
 import freshness  # noqa: E402
 import sillytavern  # noqa: E402
 from templates import RULES, new_card, slug  # noqa: E402
@@ -373,6 +373,12 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["presets"] and method == "POST":
             wanted = self.json_body()
             return self.send_json({"id": ws.create_preset(wanted.get("name"), wanted.get("copy_of"))})
+        if parts == ["presets", "import"] and method == "POST":
+            # A preset file somebody shared (or one exported here), added beside the others. Nothing is overwritten.
+            try:
+                return self.send_json({"id": take_preset(self.body(), query.get("name", ""), ws.presets)})
+            except PresetError as e:
+                raise Refused(400, str(e))
         if parts == ["preview"] and method == "POST":
             # Shows the preset builder what a prompt looks like when it goes out. The preset is sent along, so unsaved edits count.
             wanted = self.json_body()
@@ -383,6 +389,10 @@ class Handler(BaseHTTPRequestHandler):
             if wanted.get("turn"):
                 return self.send_json(preview_turn(card, preset, wanted.get("provider") or "openrouter", wanted.get("bookkeeper", True) is not False))
             return self.send_json(preview_prompt(card, preset, wanted.get("key")))
+        if len(parts) == 3 and parts[0] == "presets" and parts[2] == "download" and method == "GET":
+            # The preset as a file to hand to someone: they add it with Import a preset file on the game's Preset screen.
+            ws.read_preset(parts[1])        # refuses a file that is not valid JSON
+            return self.send_file(ws.preset_path(parts[1]), "application/json", {"Content-Disposition": 'attachment; filename="%s%s"' % (parts[1], PRESET_ENDING)})
         if len(parts) == 2 and parts[0] == "presets":
             if method == "GET":
                 preset = ws.read_preset(parts[1])

@@ -219,6 +219,46 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(self.call("POST", "/api/preview", body)[0], 404)
         self.assertEqual(self.call("POST", "/api/preview", {"preset": {"blocks": []}, "card": "rusty_lantern", "key": "summarize"})[0], 409)
 
+        # Export: the preset as a file, which the game takes in with Import a preset file.
+        request = urllib.request.Request(self.base + "/api/presets/for_small_models/download")
+        with urllib.request.urlopen(request) as reply:
+            self.assertEqual(reply.headers["Content-Disposition"], 'attachment; filename="for_small_models.preset.json"')
+            exported = os.path.join(self.work, "for_small_models.preset.json")
+            with open(exported, "wb") as f:
+                f.write(reply.read())
+        game_presets = os.path.join(self.work, "game_presets")
+        taken = wording.import_preset(exported, game_presets)
+        self.assertEqual(taken, "for_small_models")
+        with open(os.path.join(game_presets, "for_small_models.preset.json")) as f:
+            self.assertEqual(json.load(f)["prompts"], {"judge_quests": "Be strict. Reply with JSON."})
+        self.assertEqual(wording.import_preset(exported, game_presets), "for_small_models_2")         # a second time does not overwrite the first
+        shutil.copy(exported, os.path.join(self.work, "default.preset.json"))
+        self.assertEqual(wording.import_preset(os.path.join(self.work, "default.preset.json"), game_presets), "imported_default")   # never the game's own
+        for name, content, why in (("notes.json", b"hello", "not valid JSON"), ("card.json", b'{"spec": "aigame-card"}', "not a usable preset"), ("big.json", b" " * (2 * 1024 * 1024 + 5), "too large")):
+            with open(os.path.join(self.work, name), "wb") as f:
+                f.write(content)
+            with self.assertRaises(wording.PresetError) as refused:
+                wording.import_preset(os.path.join(self.work, name), game_presets)
+            self.assertIn(why, str(refused.exception))
+        self.assertRaises(wording.PresetError, wording.import_preset, os.path.join(self.work, "missing.json"), game_presets)
+        self.assertEqual(sorted(os.listdir(game_presets)), ["for_small_models.preset.json", "for_small_models_2.preset.json", "imported_default.preset.json"])
+        self.assertEqual(self.call("GET", "/api/presets/nope/download")[0], 404)
+
+        # Import in the creator: the exported file comes back in as a preset of its own, and a bad file is refused with the reason.
+        with open(exported, "rb") as f:
+            status, back = self.call("POST", "/api/presets/import?name=for_small_models.preset.json", f.read(), raw=True)
+        self.assertEqual((status, back["id"]), (200, "for_small_models_3"))                     # _2 is the copy made above; nothing is overwritten
+        self.assertEqual(self.call("GET", "/api/presets/for_small_models_3")[1]["preset"]["prompts"], {"judge_quests": "Be strict. Reply with JSON."})
+        status, refused = self.call("POST", "/api/presets/import?name=notes.json", b"hello", raw=True)
+        self.assertEqual((status, refused["error"]), (400, "That file is not a preset: it is not valid JSON."))
+        status, refused = self.call("POST", "/api/presets/import?name=../../x.json", json.dumps({"spec": "aigame-card"}).encode(), raw=True)
+        self.assertEqual(status, 400)
+        with open(exported, "rb") as f:
+            status, odd = self.call("POST", "/api/presets/import?name=..%2F..%2Fevil%20name.JSON", f.read(), raw=True)
+        self.assertEqual((status, odd["id"]), (200, "evil_name"))                                # the name is only ever a plain file name in the presets folder
+        self.assertEqual(self.call("DELETE", "/api/presets/for_small_models_3")[0], 200)
+        self.assertEqual(self.call("DELETE", "/api/presets/evil_name")[0], 200)
+
         self.assertEqual(self.call("DELETE", "/api/presets/default")[0], 403)
         self.assertEqual(self.call("DELETE", "/api/presets/for_small_models_2")[0], 200)
         self.assertEqual([p["id"] for p in self.call("GET", "/api/presets")[1]["presets"]], ["default", "for_small_models"])

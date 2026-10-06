@@ -1096,6 +1096,8 @@ async function openPreset(id, wanted, entry, preview) {
     app.replaceChildren(el("div", { class: "editor" },
       el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards and presets" }), el("h1"), el("span", { class: "status", text: presetBuiltin ? "Read only" : "Saved" }),
         el("span", { class: "badge" }),
+        el("a", { class: "button", href: `/api/presets/${id}/download`, title: "Saves this preset as a file to share. In the game: Menu, Settings, Preset, Import a preset file.",
+          onclick: async (event) => { event.preventDefault(); await flush(); location.href = `/api/presets/${id}/download`; } }, "Export"),
         !presetBuiltin && el("button", { class: "button", type: "button", text: "Duplicate", onclick: () => copyPreset(presetId, (preset.name || "Preset") + " copy").catch((error) => alert(error.message)) }), looksControls()),
       el("nav", { class: "sidebar" }), el("main", { class: "main" })));
     showProblems();
@@ -1170,6 +1172,14 @@ async function openHome() {
   const [{ projects, folder }, shelf] = await Promise.all([api("GET", "/api/projects"), api("GET", "/api/presets")]);
   const presetName = el("input", { type: "text", placeholder: "Name of your preset" });
   const presetFrom = el("select", {}, shelf.presets.map((p) => el("option", { value: p.id, text: "Copy of " + p.name })));
+  const presetFile = el("input", { type: "file", accept: ".json,application/json" });
+  presetFile.addEventListener("change", async () => {
+    if (!presetFile.files[0]) return;
+    try {
+      const made = await api("POST", `/api/presets/import?name=${encodeURIComponent(presetFile.files[0].name)}`, presetFile.files[0], true);
+      location.hash = `#/preset/${made.id}/instructions`;
+    } catch (problem) { error.textContent = problem.message; presetFile.value = ""; }
+  });
   const makePreset = async () => {
     try { await copyPreset(presetFrom.value || undefined, presetName.value); } catch (problem) { error.textContent = problem.message; }
   };
@@ -1218,6 +1228,8 @@ async function openHome() {
         } }))))),
     el("div", { class: "panel" }, el("h3", { text: "Make a new preset" }), el("p", { class: "muted small", text: "A new preset starts as a copy of another, so it works from the first moment." }),
       el("div", { class: "row" }, el("label", {}, "Name", presetName), el("label", {}, "Starting point", presetFrom), el("button", { class: "primary", text: "Create", onclick: makePreset }))),
+    el("div", { class: "panel" }, el("h3", { text: "Import a preset file" }),
+      el("p", { class: "muted small", text: "A .preset.json file somebody shared, or one you exported from here. It is added beside your presets; nothing is replaced." }), presetFile),
     error, el("p", { class: "muted small" }, "Cards are kept in ", el("code", {}, folder), ", presets in ", el("code", {}, shelf.folder))));
 }
 

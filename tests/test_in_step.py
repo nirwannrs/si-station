@@ -81,6 +81,7 @@ class InStepTest(unittest.TestCase):
             "pack": "pack_card",
             "file": None,                                # only serves pictures to the editor page
             "presets": "save_preset",                    # also list_presets, get_preset, trash_preset; preset_format is the builder's reference
+            "presets import": "save_preset",             # an assistant reads the file itself and saves its content
             "preview": None,                             # only shows the preset builder what a prompt looks like when sent
             "exports": "pack_card",                      # the download link; pack_card returns the file's path instead
         }

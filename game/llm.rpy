@@ -78,6 +78,8 @@ init python:
         preset_edit = None
         # the same for one of the game's own prompts: {"key", "had", "before"}
         wording_edit = None
+        # what the last preset import did, shown on the Preset screen
+        preset_message = ""
         # API keys, by connection id, while the game runs. They are never part of the saved settings:
         # see the API keys section below. keys_stored is what the system's store holds, to know what changed.
         keys = {}
@@ -353,6 +355,23 @@ init python:
             persistent.preset.pop(key, None)
             if not persistent.preset.get("blocks") and not persistent.preset.get("prompts"):
                 persistent.preset = None
+
+    def preset_import():
+        """Asks for a preset file someone shared, adds it to the presets folder and switches to it."""
+        runtime.preset_message = ""
+        try:
+            path = pick_file("Choose a preset file", "SI-Station presets (*.json)|*.json|")
+        except Exception:
+            runtime.preset_message = "No file chooser is available here. Copy the preset file into the game's presets folder instead."
+            path = None
+        if path:
+            try:
+                name = aig_wording.import_preset(path, preset_folder())
+                preset_choose(name)
+                runtime.preset_message = "Imported \"%s\" and switched to it." % read_preset(name)["name"]
+            except aig_wording.PresetError as e:
+                runtime.preset_message = str(e)
+        renpy.restart_interaction()
 
     def preset_choose(name):
         """Switches to another preset file. The player's own changes belonged to the old one."""
@@ -997,9 +1016,67 @@ screen turn_input():
     default story_scroll = ui.adjustment()
     $ card = current_card()
 
-    if not card.visual:
-        use backdrop
+    if card.visual:
+        use play_bar
 
+        if recap_hidden:
+            frame:
+                align (1.0, 1.0)
+                padding (30, 14)
+                background "#000000b0"
+                textbutton _("Show text") action SetVariable("recap_hidden", False)
+        else:
+            frame:
+                xfill True
+                yalign 1.0
+                padding (60, 24)
+                background "#000000d8"
+                vbox:
+                    spacing 14
+                    viewport:
+                        ysize 300
+                        scrollbars "vertical"
+                        mousewheel True
+                        draggable True
+                        use turn_text(game_state["history"][-1] if game_state["history"] else None)
+                    use turn_controls(typed)
+
+    else:
+        ## A text-only card is all story, so the story takes the whole screen: the bar on top, the
+        ## input at the bottom, and the text filling everything between. The picture behind stays
+        ## visible through the panel over it, which is dark enough that the picture does not compete with
+        ## the words; the text is outlined as well, for the bright parts of a picture.
+        use backdrop
+        side "t b c":
+            xfill True
+            yfill True
+            use play_bar
+            frame:
+                xfill True
+                padding (60, 16, 60, 20)
+                background "#000000b8"
+                vbox:
+                    spacing 12
+                    use turn_controls(typed)
+            frame:
+                xfill True
+                yfill True
+                padding (60, 18, 40, 10)
+                background "#000000b8"
+                viewport:
+                    style_prefix "story"
+                    yadjustment story_scroll
+                    scrollbars "vertical"
+                    mousewheel True
+                    draggable True
+                    use story_log(TEXT_MODE_TURNS)
+        ## Once the log has been laid out, bring the newest turn to the top of the view.
+        timer 0.05 action Function(scroll_to_newest, story_scroll)
+
+
+## The bar across the top of the play screen: the card, the buttons, and how the player stands.
+screen play_bar():
+    $ card = current_card()
     frame:
         xfill True
         padding (60, 20)
@@ -1017,71 +1094,50 @@ screen turn_input():
                     textbutton _("Menu") action ShowMenu() text_size 30
             text esc(status_line()) size 24 color "#cccccc"
 
-    if card.visual and recap_hidden:
+
+## What sits under the story on the play screen: an error if the last turn failed, the suggested
+## replies, the box to type in, and the small row of hints. typed is what is in the box right now:
+## the box itself edits turn_input's own variable of that name, and Send returns it.
+screen turn_controls(typed):
+    $ card = current_card()
+
+    if turn_error:
+        text esc(turn_error) color "#ff8080"
+
+    if suggestions:
+        vbox:
+            for choice in suggestions:
+                textbutton esc(choice) action Return(choice) text_size 28
+    elif runtime.suggesting:
+        text _("Thinking of suggestions...") color "#aaaaaa" size 28
+
+    hbox:
+        spacing 20
+        text _("You:") yalign 0.5
         frame:
-            align (1.0, 1.0)
-            padding (30, 14)
-            background "#000000b0"
-            textbutton _("Show text") action SetVariable("recap_hidden", False)
+            xsize 1340
+            padding (16, 10)
+            input value ScreenVariableInputValue("typed", returnable=True) copypaste True multiline True xmaximum 1300
+        textbutton _("Send") action Return(typed) yalign 0.5
+        if card.visual:
+            textbutton _("Hide text") action SetVariable("recap_hidden", True) yalign 0.5
 
-    else:
-        frame:
-            xfill True
-            yalign 1.0
-            padding (60, 24)
-            background "#000000d8"
+    hbox:
+        spacing 14
+        text (_("Enter starts a new line, Shift+Enter sends.") if persistent.enter_newline else _("Enter sends, Shift+Enter starts a new line.")) size 22 color "#999999" yalign 0.5
+        textbutton _("Switch") action Function(toggle_enter_key) text_size 22 yalign 0.5
+        if game_state["history"] and can_undo():
+            textbutton _("Undo last turn") action Function(undo_turn) text_size 22 yalign 0.5
+        text _("*italic*  **bold**") size 22 color "#999999" yalign 0.5
+        if usage_brief():
+            text esc(usage_brief()) size 22 color "#999999" yalign 0.5
 
-            vbox:
-                spacing 14
 
-                if card.visual:
-                    viewport:
-                        ysize 300
-                        scrollbars "vertical"
-                        mousewheel True
-                        draggable True
-                        use turn_text(game_state["history"][-1] if game_state["history"] else None)
-                else:
-                    viewport:
-                        ysize 560
-                        yadjustment story_scroll
-                        scrollbars "vertical"
-                        mousewheel True
-                        draggable True
-                        use story_log(TEXT_MODE_TURNS)
-                    ## Once the log has been laid out, bring the newest turn to the top of the view.
-                    timer 0.05 action Function(scroll_to_newest, story_scroll)
-
-                if turn_error:
-                    text esc(turn_error) color "#ff8080"
-
-                if suggestions:
-                    vbox:
-                        for choice in suggestions:
-                            textbutton esc(choice) action Return(choice) text_size 28
-                elif runtime.suggesting:
-                    text _("Thinking of suggestions...") color "#aaaaaa" size 28
-
-                hbox:
-                    spacing 20
-                    text _("You:") yalign 0.5
-                    frame:
-                        xsize 1340
-                        padding (16, 10)
-                        input value ScreenVariableInputValue("typed", returnable=True) copypaste True multiline True xmaximum 1300
-                    textbutton _("Send") action Return(typed) yalign 0.5
-                    if card.visual:
-                        textbutton _("Hide text") action SetVariable("recap_hidden", True) yalign 0.5
-
-                hbox:
-                    spacing 14
-                    text (_("Enter starts a new line, Shift+Enter sends.") if persistent.enter_newline else _("Enter sends, Shift+Enter starts a new line.")) size 22 color "#999999" yalign 0.5
-                    textbutton _("Switch") action Function(toggle_enter_key) text_size 22 yalign 0.5
-                    if game_state["history"] and can_undo():
-                        textbutton _("Undo last turn") action Function(undo_turn) text_size 22 yalign 0.5
-                    text _("*italic*  **bold**") size 22 color "#999999" yalign 0.5
-                    if usage_brief():
-                        text esc(usage_brief()) size 22 color "#999999" yalign 0.5
+## Story text over a picture: a dark edge around every letter.
+style story_text is text
+style story_text:
+    outlines [(3, "#000000c8", 0, 0)]
+style story_vscrollbar is vscrollbar
 
 
 ## The conversation so far, oldest first. Used by the History menu.
@@ -1111,10 +1167,15 @@ screen preset():
             spacing 18
             text _("What the story model is told before it writes. Each line is one instruction: tick it to use it, or edit its wording. Changes are yours, on this device, for every card.") size 24
 
-            if len(files) > 1:
-                vbox:
-                    spacing 4
-                    text _("Presets are files in the game's presets folder. Make and edit them in the card creator, under Presets.") size 22 color "#999999"
+            vbox:
+                spacing 4
+                text _("Presets are files in the game's presets folder. Make them in the card creator, under Presets, or import one somebody shared.") size 22 color "#999999"
+                hbox:
+                    spacing 30
+                    textbutton _("Import a preset file") action Function(preset_import)
+                    if runtime.preset_message:
+                        text esc(runtime.preset_message) size 22 color "#ffd28a" yalign 0.5
+                if len(files) > 1:
                     hbox:
                         spacing 30
                         box_wrap True

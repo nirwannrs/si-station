@@ -82,19 +82,20 @@ init python:
         persistent.card = None
         renpy.full_restart()
 
-    def pick_file():
-        """Opens the system's file chooser. Returns a path, None if cancelled, or raises OSError if there is no chooser."""
+    def pick_file(prompt="Choose a card file", kinds="SI-Station cards (*.sicard)|*.sicard|"):
+        """Opens the system's file chooser. Returns a path, None if cancelled, or raises OSError if there is no chooser.
+        prompt is a short plain title; kinds is the Windows file filter that comes before "All files"."""
         if renpy.macintosh:
-            command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Choose a card file")']
+            command = ["osascript", "-e", 'POSIX path of (choose file with prompt "%s")' % prompt]
             flags = 0
         elif renpy.windows:
             script = ("Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; "
-                      "$d.Filter = 'SI-Station cards (*.sicard)|*.sicard|All files (*.*)|*.*'; "
+                      "$d.Filter = '" + kinds + "All files (*.*)|*.*'; "
                       "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }")
             command = ["powershell", "-NoProfile", "-Command", script]
             flags = 0x08000000  # no console window
         elif renpy.linux:
-            command = ["zenity", "--file-selection", "--title=Choose a card file"]
+            command = ["zenity", "--file-selection", "--title=" + prompt]
             flags = 0
         else:
             raise OSError("no file chooser on this platform")

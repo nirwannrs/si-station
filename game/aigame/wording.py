@@ -13,6 +13,10 @@ say). If an edited prompt leaves one out, the part is added at the end, so nothi
 can be lost by an edit.
 """
 
+import json
+import os
+import re
+
 BUILTIN_PROMPTS = []        # in the order the editors show them
 _BY_KEY = {}
 
@@ -111,6 +115,54 @@ def check_preset(preset):
             elif isinstance(value, bool) or not isinstance(value, (int, float)):
                 problems.append("%s.%s must be a number" % (group, key))
     return problems
+
+
+PRESET_ENDING = ".preset.json"
+
+
+class PresetError(Exception):
+    """Carries a message that is fit to show to the player."""
+
+
+def import_preset(path, folder):
+    """Copies a preset file someone shared into the presets folder and returns the name it has
+    there (its file name without the ending). The file is checked first; one the game could not
+    use is refused with the reason. A preset is plain text and holds no keys or other secrets."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(2 * 1024 * 1024 + 1)
+    except (IOError, OSError) as e:
+        raise PresetError("The file could not be read: %s" % e)
+    return take_preset(raw, os.path.basename(path), folder)
+
+
+def take_preset(raw, file_name, folder):
+    """The same, for a preset already read into memory (an upload), named after the file it came from."""
+    if len(raw) > 2 * 1024 * 1024:
+        raise PresetError("That file is too large to be a preset.")
+    try:
+        preset = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise PresetError("That file is not a preset: it is not valid JSON.")
+    problems = check_preset(preset)
+    if problems:
+        raise PresetError("That file is not a usable preset: %s." % problems[0])
+    base = os.path.basename(file_name or "")
+    for ending in (PRESET_ENDING, ".json"):
+        if base.lower().endswith(ending):
+            base = base[:-len(ending)]
+            break
+    base = re.sub(r"[^a-z0-9]+", "_", base.lower()).strip("_") or re.sub(r"[^a-z0-9]+", "_", preset["name"].lower()).strip("_") or "preset"
+    if base == "default":
+        base = "imported_default"       # the game's own preset is never replaced
+    name, n = base, 2
+    while os.path.exists(os.path.join(folder, name + PRESET_ENDING)):
+        name, n = "%s_%d" % (base, n), n + 1
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    with open(os.path.join(folder, name + PRESET_ENDING), "wb") as f:
+        f.write((json.dumps(preset, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    return name
 
 
 # The built-in parts a preset's slot blocks can name. The game fills them from the card and the save.
