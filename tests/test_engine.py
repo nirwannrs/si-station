@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "game"))
 
 from aigame import battle  # noqa: E402
-from aigame.actions import apply_action, sell_price  # noqa: E402
+from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
 from aigame.card import Card, CardError, check_card, import_card, list_cards, load_card, pack_card  # noqa: E402
 from aigame.state import effective_stat, new_game, reconcile  # noqa: E402
 
@@ -53,7 +53,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.me["inventory"], {"healing_draught": 1, "belt_knife": 1})
         self.assertEqual(self.me["equipment"], {"body": "travel_cloak"})
         self.assertEqual(self.state["actors"]["tobin"]["stats"]["hp"], 10)
-        self.assertEqual(self.state["quests"], {"missing_courier": {"status": "active", "stage": 0}})
+        self.assertEqual(self.state["quests"], {"missing_courier": {"status": "active", "stage": 0, "met": []}})
 
     def test_persona_overrides_default_text_but_keeps_loadout(self):
         me = new_game(self.card, {"name": "Ash"})["actors"]["player"]
@@ -142,7 +142,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.me["stats"], {"hp": 20, "stamina": 5, "mana": 10, "defense": 0})
         self.assertEqual(self.me["location"], "common_room")
         self.assertEqual(sorted(self.state["actors"]), ["marsh_bandit", "mira", "player", "tobin"])
-        self.assertEqual(self.state["quests"], {"missing_courier": {"status": "active", "stage": 2}})
+        self.assertEqual(self.state["quests"], {"missing_courier": {"status": "active", "stage": 2, "met": []}})
         self.assertEqual(self.state["shops"], {"lantern_bar": {"stew": None, "healing_draught": 0}})
         self.assertEqual(self.state["expressions"], {})
         for action in [{"type": "use_item", "item": "healing_draught"}, {"type": "move", "location": "stable"}]:
@@ -262,11 +262,50 @@ class EngineTest(unittest.TestCase):
     def test_quest_advances_then_completes_with_rewards(self):
         self.rejected(type="quest_start", quest="missing_courier")
         self.assertIn("Find what the courier", self.ok(type="quest_advance", quest="missing_courier"))
-        self.ok(type="quest_advance", quest="missing_courier")
+        # The second objective is the game's to mark: no model can move it, holding the letter does.
+        self.assertIn("The game itself marks", self.rejected(type="quest_advance", quest="missing_courier"))
+        told = apply_actions(self.card, self.state, [{"type": "move", "location": "stable"}, {"type": "transfer_item", "item": "sealed_letter", "from": "tobin", "to": "player"}])
+        self.assertIn("new objective: Decide what to do with the letter.", told[-1]["message"])
         self.assertIn("Reward: 15 Gold, Healing Draught", self.ok(type="quest_advance", quest="missing_courier"))
         self.assertEqual((self.me["money"], self.me["inventory"]["healing_draught"]), (21, 2))
         self.rejected(type="quest_advance", quest="missing_courier")
         self.rejected(type="quest_fail", quest="missing_courier")
+
+    def test_getting_there_early_carries_the_quest_past_what_came_before(self):
+        quest = self.state["quests"]["missing_courier"]
+        told = apply_actions(self.card, self.state, [{"type": "move", "location": "stable"}, {"type": "transfer_item", "item": "sealed_letter", "from": "tobin", "to": "player"}])
+        self.assertEqual(quest["stage"], 2)                       # never learned of the horse, but holds the letter
+        self.assertEqual([r["message"] for r in told][-1], "Quest The Missing Courier: new objective: Decide what to do with the letter.")
+        self.assertEqual(apply_actions(self.card, self.state, []), [])           # and it is only said once
+
+    def test_a_condition_true_from_the_start_skips_nothing(self):
+        stages = self.card.quests["missing_courier"]["stages"]
+        stages[2]["done_if"] = [{"type": "at", "location": "common_room"}]       # "bring it back to the inn"
+        state = new_game(self.card)
+        quest = state["quests"]["missing_courier"]
+        self.assertEqual(apply_actions(self.card, state, []), [])                # already at the inn: that proves nothing yet
+        self.assertEqual(quest["stage"], 0)
+        apply_actions(self.card, state, [{"type": "move", "location": "stable"}], by_player=True)
+        apply_actions(self.card, state, [{"type": "transfer_item", "item": "sealed_letter", "from": "tobin", "to": "player"}])
+        self.assertEqual(quest["stage"], 2)
+        done = apply_actions(self.card, state, [{"type": "move", "location": "common_room"}], by_player=True)
+        self.assertIn("Quest completed: The Missing Courier.", done[-1]["message"])
+        self.assertEqual(quest["status"], "done")
+
+    def test_other_conditions_and_bad_ones(self):
+        from aigame.state import condition_met
+        self.state["actors"]["tobin"]["relationship"] = 50
+        for condition, met in [({"type": "relationship", "who": "tobin", "at_least": 50}, True), ({"type": "relationship", "who": "tobin", "at_least": 51}, False),
+                               ({"type": "level", "at_least": 1}, True), ({"type": "level", "at_least": 2}, False),
+                               ({"type": "at", "who": "tobin", "location": "stable"}, True), ({"type": "has_item", "who": "mira", "item": "cellar_key"}, True),
+                               ({"type": "has_item", "who": "nobody", "item": "stew"}, False), ({"type": "wish"}, False)]:
+            self.assertEqual(bool(condition_met(self.card, self.state, condition)), met, condition)
+        card = json.loads(json.dumps(self.card.data))
+        card["quests"][0]["stages"][0]["done_if"] = [{"type": "has_item", "item": "crown"}, {"type": "at", "location": "moon"}, {"type": "relationship", "at_least": 5},
+                                                     {"type": "level"}, {"type": "wish"}, {"type": "at", "who": "ghost", "location": "stable"}]
+        problems = "\n".join(check_card(card))
+        for expected in ("unknown item 'crown'", "unknown location 'moon'", "must name a character", "a level condition needs a number", "unknown type 'wish'", "unknown character 'ghost'"):
+            self.assertIn(expected, problems)
 
     # malformed input from an LLM
 

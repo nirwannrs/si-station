@@ -312,6 +312,22 @@
                 "description": { "type": "string", "description": "Objective text shown in the quest log." },
                 "guidance": { "type": "string", "description": "Narrator-only: how to play this part of the story. Not a condition: nothing here decides when the objective is over." },
                 "done_when": { "type": "string", "description": "What must have happened for this objective to count as finished, for the quest judge. If left out, the judge goes by the objective's description, and requires all of it to be over." },
+                "done_if": {
+                  "type": "array",
+                  "description": "Conditions the game checks by itself, with no AI involved. When all of them hold, the objective is finished, and the quest judge is not asked about it. If the conditions of a later objective come true while an earlier one is still open, the quest moves past both. Leave out for objectives only the story can decide; those use done_when.",
+                  "items": {
+                    "type": "object",
+                    "required": ["type"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": { "enum": ["has_item", "at", "level", "relationship"], "description": "has_item: who holds item. at: who is at location. level: the player's level is at_least. relationship: who's relationship with the player is at_least." },
+                      "who": { "type": "string", "description": "\"player\" or a character id. Defaults to the player for has_item and at; required for relationship." },
+                      "item": { "$ref": "#/$defs/id" },
+                      "location": { "$ref": "#/$defs/id" },
+                      "at_least": { "type": "number" }
+                    }
+                  }
+                },
                 "hint": { "type": "string", "description": "Older name for guidance. Still read; new cards should use guidance and done_when." }
               }
             }

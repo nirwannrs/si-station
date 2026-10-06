@@ -6,7 +6,7 @@ plain factual sentences because they are fed back to the narrator.
 """
 
 from .card import PLAYER, SLOTS
-from .state import knows_place, left_place, places, reveal
+from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
 from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
@@ -49,7 +49,7 @@ def apply_actions(card, state, actions, by_player=False):
             results.append(result)
         else:
             results.append(apply_action(card, state, action, by_player))
-    return results
+    return results + settle_quests(card, state)
 
 
 def apply_action(card, state, action, by_player=False):
@@ -375,6 +375,7 @@ def _quest_start(card, state, a):
     if qid in state["quests"]:
         raise Rejected("Quest %s was already started." % quest["title"])
     state["quests"][qid] = {"status": "active", "stage": 0}
+    state["quests"][qid]["met"] = quest_marks(card, state, quest)
     return "Quest started: %s. Objective: %s" % (quest["title"], quest["stages"][0]["description"])
 
 
@@ -392,6 +393,12 @@ def _quest_advance(card, state, a):
     if a.get("stage") is not None and a["stage"] != current["id"]:
         # Naming the objective proves the model is talking about the one in progress, not one it expects later.
         raise Rejected("Quest %s is not on that objective. Its current objective is %s." % (quest["title"], current["id"]))
+    if game_checked(card, current):
+        raise Rejected("The game itself marks that objective of %s once its condition is met." % quest["title"])
+    return _next_objective(card, state, quest, progress)
+
+
+def _next_objective(card, state, quest, progress):
     progress["stage"] += 1
     if progress["stage"] < len(quest["stages"]):
         return "Quest %s: new objective: %s" % (quest["title"], quest["stages"][progress["stage"]]["description"])
@@ -408,6 +415,37 @@ def _quest_advance(card, state, a):
     for stat_id, amount in rewards.get("stats", {}).items():
         got.append(_change_stat(card, state, PLAYER, stat_id, amount))
     return "Quest completed: %s.%s" % (quest["title"], " Reward: %s." % ", ".join(got) if got else "")
+
+
+def settle_quests(card, state):
+    """Moves quests on by the conditions the game can check itself (an objective's done_if), the
+    way an ordinary game would: holding the item or reaching the place is enough, whatever the
+    story said or did not say. Returns the results to show.
+
+    The current objective is finished when its conditions hold. A later objective whose conditions
+    have just come true carries the quest past everything before it, so getting the letter early
+    does not leave the quest asking where the courier went. "Just come true" matters: a condition
+    that was already true when the quest began (being at the inn) skips nothing.
+    """
+    results = []
+    for quest_id, progress in state["quests"].items():
+        quest = card.quests.get(quest_id)
+        while quest is not None and progress["status"] == "active":
+            now = quest_marks(card, state, quest)
+            fresh = set(now) - set(progress.get("met", now))
+            progress["met"] = now
+            stages, reached = quest["stages"], None
+            if stages[progress["stage"]]["id"] in now:
+                reached = progress["stage"]
+            for index in range(progress["stage"] + 1, len(stages)):
+                if stages[index]["id"] in fresh:
+                    reached = index
+            if reached is None:
+                break
+            progress["stage"] = reached
+            results.append({"action": {"type": "quest_advance", "quest": quest_id}, "ok": True,
+                            "message": _next_objective(card, state, quest, progress)})
+    return results
 
 
 def _quest_fail(card, state, a):

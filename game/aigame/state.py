@@ -86,7 +86,7 @@ def new_game(card, persona=None):
     for c in card.data.get("characters", []):
         actors[c["id"]] = _new_actor(card, c["name"], c.get("start"), c.get("location"))
 
-    return {
+    state = {
         "card_id": card.id,
         "turn": 0,
         "actors": actors,
@@ -123,6 +123,9 @@ def new_game(card, persona=None):
         # character id -> the expression they last wore
         "expressions": {},
     }
+    for quest_id, progress in state["quests"].items():
+        progress["met"] = quest_marks(card, state, card.quests[quest_id])
+    return state
 
 
 def all_items(card, state):
@@ -287,3 +290,45 @@ def track(card, state, updates):
             where = places(card, state).get(actor["location"])
             changed.append("%s: %s%s" % (actor["name"], where["name"] if where else "off the map", " (%s)" % actor["note"] if actor["note"] else ""))
     return changed
+
+# Objectives the game can check by itself, with no model involved.
+
+CONDITIONS = ("has_item", "at", "level", "relationship")
+
+
+def condition_met(card, state, condition):
+    """One entry of an objective's done_if. Anything it cannot make sense of is simply not met."""
+    actor = state["actors"].get(condition.get("who") or PLAYER)
+    kind = condition.get("type")
+    if kind == "has_item":
+        return actor is not None and actor["inventory"].get(condition.get("item"), 0) >= 1
+    if kind == "at":
+        return actor is not None and actor["location"] is not None and actor["location"] == condition.get("location")
+    if kind == "level":
+        return state["actors"][PLAYER].get("level", 1) >= (condition.get("at_least") or 0)
+    if kind == "relationship":
+        return actor is not None and condition.get("who") and actor.get("relationship", 0) >= (condition.get("at_least") or 0)
+    return False
+
+
+NEEDS_FEATURE = {"has_item": "inventory", "level": "levels", "relationship": "relationships"}
+
+
+def game_checked(card, stage):
+    """The objective's conditions, when the game can check them. A card that has switched off a
+    system a condition relies on (items, say) leaves the objective to the story instead."""
+    conditions = stage.get("done_if") or []
+    if any(not isinstance(c, dict) or (c.get("type") in NEEDS_FEATURE and not card.has(NEEDS_FEATURE[c["type"]])) for c in conditions):
+        return []
+    return conditions
+
+
+def stage_met(card, state, stage):
+    """True when the objective has conditions the game checks and all of them hold now."""
+    conditions = game_checked(card, stage)
+    return bool(conditions) and all(condition_met(card, state, c) for c in conditions)
+
+
+def quest_marks(card, state, quest):
+    """Ids of the quest's objectives whose game-checked conditions hold right now."""
+    return [s["id"] for s in quest["stages"] if stage_met(card, state, s)]

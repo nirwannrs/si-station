@@ -581,7 +581,7 @@ const SECTIONS = [
     ] },
   ] },
 
-  { id: "quests", title: "Quests", count: () => (card.quests || []).length, intro: "Goals with one or more objectives. The AI decides when an objective is met; the game tracks it and pays the reward.", fields: () => [
+  { id: "quests", title: "Quests", count: () => (card.quests || []).length, intro: "Goals with one or more objectives. The game marks an objective done by itself when you give it a condition it can check; otherwise the AI decides. The game tracks progress and pays the reward.", fields: () => [
     { t: "list", k: "quests", add: "Add a quest", make: () => ({ id: "", title: "", stages: [{ id: "start", description: "" }] }), title: (q) => q.title, sub: (q) => `${(q.stages || []).length} objectives`, fields: [
       { t: "text", k: "title", label: "Title", feeds: "id" },
       { t: "text", k: "id", label: "Id" },
@@ -592,6 +592,16 @@ const SECTIONS = [
         { t: "text", k: "description", label: "What the player sees", feeds: "id" },
         { t: "text", k: "id", label: "Id" },
         { t: "area", k: "done_when", label: "It is finished only when", rows: 2, help: "What must have happened for this objective to count as done. Be exact: \"all four tests are over\", not \"the tests\". Leave empty and the game requires everything in the description to be over. Only the AI sees this." },
+        { t: "list", k: "done_if", label: "Or: the game marks it done by itself when", inline: true, add: "Add a condition", make: () => ({ type: "has_item" }),
+          help: "Conditions the game checks without asking the AI, like an ordinary game. When all of them are true the objective is done, even if the player got there early. Use these whenever an objective comes down to holding something or being somewhere.", fields: [
+          { t: "select", k: "type", label: "Condition", none: false, default: "has_item", redraw: true,
+            options: () => [["has_item", "Someone has an item"], ["at", "Someone is at a place"], ...(has("levels") ? [["level", "The player's level is at least"]] : []), ...(has("relationships") ? [["relationship", (card.rules.relationship_name || "Relationship") + " with a character is at least"]] : [])] },
+          { t: "select", k: "who", label: "Who", none: "The player", options: O.characters, when: (c) => (c.type || "has_item") === "has_item" || c.type === "at" },
+          { t: "select", k: "who", label: "Character", none: "(choose)", options: O.characters, when: (c) => c.type === "relationship" },
+          { t: "select", k: "item", label: "Item", none: "(choose)", options: O.items, when: (c) => (c.type || "has_item") === "has_item" },
+          { t: "select", k: "location", label: "Place", none: "(choose)", options: O.locations, when: (c) => c.type === "at" },
+          { t: "number", k: "at_least", label: "At least", when: (c) => c.type === "level" || c.type === "relationship" },
+        ] },
         { t: "area", k: "guidance", label: "How to play this part", rows: 3, help: "Direction for the narrator: who appears, what should happen, what to keep secret. It does not decide when the objective is over. Only the AI sees this." },
       ] },
       { t: "group", k: "rewards", label: "Reward for finishing", fields: [

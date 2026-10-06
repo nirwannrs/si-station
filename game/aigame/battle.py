@@ -9,7 +9,7 @@ called during a fight; it narrates the aftermath from the results.
 
 import random
 
-from .actions import apply_action, _change_stat
+from .actions import apply_action, settle_quests, _change_stat
 from .card import PLAYER
 from .state import blocked, effective_stat, is_away, places
 
@@ -61,6 +61,10 @@ def _enemy_skills(card, state, enemy):
 
 def take_turn(card, state, action, rng=_rng):
     """Plays one round and returns its results. A rejected player action costs nothing: no enemy acts."""
+    return _round(card, state, action, rng) + settle_quests(card, state)
+
+
+def _round(card, state, action, rng):
     kind = action.get("type") if isinstance(action, dict) else None
     player = state["actors"][PLAYER]
 

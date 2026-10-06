@@ -214,7 +214,8 @@ class DirectorTest(unittest.TestCase):
         paragraphs = prompt.split_paragraphs("One.\n\n  \nTwo line\nstill two.\n\n\nThree.")
         self.assertEqual(paragraphs, ["One.", "Two line\nstill two.", "Three."])
         system, messages = prompt.director_prompt(self.card, self.state, paragraphs)
-        self.assertIn("Mira Oakhand (id: mira). Expressions: angry, happy, neutral, worried", messages[0]["content"])
+        self.assertIn("Mira Oakhand (id: mira). Looks: Broad-shouldered woman", messages[0]["content"])
+        self.assertIn("apron. Expressions: angry, happy, neutral, worried", messages[0]["content"])
         self.assertIn("3. Three.", messages[0]["content"])
 
     def test_direction_is_validated(self):
@@ -709,9 +710,16 @@ class QuestJudgeTest(unittest.TestCase):
         thrice = [{"type": "quest_advance", "quest": "missing_courier"}] * 3
         results = apply_actions(self.card, self.state, thrice)
         self.assertEqual(len(results), 1)                                   # the repeats are dropped, not shown as errors
-        self.assertEqual(self.quest, {"status": "active", "stage": 1})
+        self.assertEqual(self.quest, {"status": "active", "stage": 1, "met": []})
+        del self.card.quests["missing_courier"]["stages"][1]["done_if"]         # leave this one to the story, as before
         apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "Missing_Courier"}, {"type": "quest_advance", "quest": "missing_courier"}])
         self.assertEqual(self.quest["stage"], 2)
+
+    def test_the_judge_is_told_which_objectives_are_the_games(self):
+        self.quest["stage"] = 1
+        told = prompt.judge_prompt(self.card, self.state, "I look around.", "Rain.")[1][0]["content"]
+        self.assertIn("The game itself marks this objective finished.", told)
+        self.assertNotIn("Finished only when", told)
 
     def test_the_objective_named_must_be_the_one_in_progress(self):
         wrong = apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "missing_courier", "stage": "deliver"}])[0]
@@ -757,7 +765,7 @@ class QuestJudgeTest(unittest.TestCase):
         self.assertEqual(actions, [{"type": "quest_advance", "quest": "missing_courier", "stage": "ask_around"},
                                    {"type": "quest_advance", "quest": "missing_courier", "stage": "find_letter"}])
         apply_actions(self.card, self.state, actions)
-        self.assertEqual(self.quest, {"status": "active", "stage": 1})                    # one step, however eager the judge
+        self.assertEqual(self.quest, {"status": "active", "stage": 1, "met": []})         # one step, however eager the judge
         self.assertEqual(prompt.parse_judge('{"verdicts": [{"quest": "missing_courier", "objective": "find_letter", "verdict": "not_yet"}]}', self.card), [])
         self.assertEqual(prompt.parse_judge('{"verdicts": [{"quest": "missing_courier", "verdict": "failed"}]}', self.card), [{"type": "quest_fail", "quest": "missing_courier"}])
         self.assertEqual(prompt.parse_judge("no idea", self.card), [])

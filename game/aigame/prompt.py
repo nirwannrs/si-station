@@ -11,7 +11,7 @@ from .actions import shop_price
 from .card import PLAYER
 from .llm import extract_json
 from .text import keep_marks_paired
-from .state import describe_states, effective_stat, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
+from .state import describe_states, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -176,7 +176,7 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True)
     if uses(card, "map"):
         checks.append("- Places. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
     if uses(card, "inventory") or uses(card, "money"):
-        checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received.")
+        checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received. Only a change of hands counts: what someone is merely described as wearing, holding or working with is scenery, not a new item.")
     if uses(card, "quests") and quests:
         checks.append("- Quests. Advance a quest only when its current objective is completely finished, every part of it; one that has begun or is going well is not finished. A quest whose \"Fails if\" has happened is failed; a quest the text gives the player is started.")
     if uses(card, "levels"):
@@ -236,7 +236,10 @@ Reply with JSON only. Give the reason before the verdict:
             stage = quest["stages"][progress["stage"]]
             entry = "- %s. Current objective [%s], part %d of %d: %s" % (
                 _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
-            entry += "\n  Finished only when: %s" % (stage.get("done_when") or "everything the objective describes has happened and is over")
+            if game_checked(card, stage):
+                entry += "\n  The game itself marks this objective finished. Answer not_yet for it, unless the quest has failed."
+            else:
+                entry += "\n  Finished only when: %s" % (stage.get("done_when") or "everything the objective describes has happened and is over")
             if quest.get("fail_when"):
                 entry += "\n  Fails if: %s" % quest["fail_when"]
             active.append(entry)
@@ -657,6 +660,12 @@ def _whereabouts(card, state, who):
     return where + (", %s" % actor["note"] if actor.get("note") else "")
 
 
+def _looks(character):
+    """A short line the director can recognise an unnamed character by."""
+    text = " ".join((character.get("appearance") or character.get("description") or "").split())
+    return "Looks: %s " % (text[:160].rstrip(".") + ".") if text else ""
+
+
 def director_prompt(card, state, paragraphs):
     system = """\
 You are the stage director of a visual novel. The narrator's latest text is given as numbered paragraphs. Work out two things from it.
@@ -670,6 +679,8 @@ You are the stage director of a visual novel. The narrator's latest text is give
 - note: a few words on what they are doing or where they went, such as "tending the bar" or "rode off toward the capital".
 Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here".
 
+The text does not always use names. Work out who an unnamed person is ("a skinny boy", "the woman behind the bar") from each character's listed looks and from where they were before this text. If you cannot tell which character someone is, leave them out of both lists rather than guess.
+
 3. Which hidden places the player just learned of. If a list of places the player does not know of is given, name the ids of any that this text shows or tells the player about: they are told it exists, see the way to it, or are taken there. A place that is merely near is not revealed.
 
 Reply with JSON only:
@@ -677,8 +688,8 @@ Reply with JSON only:
  "whereabouts": [{"id": "some_id", "location": "here", "note": "..."}],
  "revealed": ["some_location_id"]}"""
     me = state["actors"][PLAYER]
-    cast = "\n".join("- %s (id: %s). Expressions: %s. Before this text: %s" % (
-        c["name"], c["id"], ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
+    cast = "\n".join("- %s (id: %s). %sExpressions: %s. Before this text: %s" % (
+        c["name"], c["id"], _looks(c), ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
     here = places(card, state).get(me["location"])
     listing = "\n[Locations]\nThe player is at %s.\n%s\n" % (_named(here), ", ".join(_named(l) for l in place_list(card, state))) if here else ""
     if _unknown_places(card, state):

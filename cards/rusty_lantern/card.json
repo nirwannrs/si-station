@@ -367,7 +367,12 @@
         {
           "id": "find_letter",
           "description": "Find what the courier was carrying.",
-          "done_when": "the player holds the sealed letter."
+          "done_if": [
+            {
+              "type": "has_item",
+              "item": "sealed_letter"
+            }
+          ]
         },
         {
           "id": "deliver",

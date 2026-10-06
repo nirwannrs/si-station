@@ -440,6 +440,27 @@ def check_card(data):
         stages = q.get("stages")
         if not isinstance(stages, list) or not stages:
             p.append("quest %s needs at least one stage" % q["id"])
+        for stage in stages if isinstance(stages, list) else []:
+            conditions = stage.get("done_if", []) if isinstance(stage, dict) else []
+            where = "quest %s objective %s" % (q["id"], stage.get("id") if isinstance(stage, dict) else "?")
+            if not isinstance(conditions, list):
+                p.append("%s: done_if must be a list of conditions" % where)
+                continue
+            for c in conditions:
+                kind = c.get("type") if isinstance(c, dict) else None
+                if kind not in ("has_item", "at", "level", "relationship"):
+                    p.append("%s has a condition of unknown type %r (use has_item, at, level or relationship)" % (where, kind))
+                    continue
+                if c.get("who") is not None and c["who"] != PLAYER and c["who"] not in char_ids:
+                    p.append("%s has a condition about unknown character %r" % (where, c["who"]))
+                if kind == "has_item" and c.get("item") not in set(i["id"] for i in items):
+                    p.append("%s has a condition about unknown item %r" % (where, c.get("item")))
+                if kind == "at" and c.get("location") not in loc_ids:
+                    p.append("%s has a condition about unknown location %r" % (where, c.get("location")))
+                if kind == "relationship" and c.get("who") not in char_ids:
+                    p.append("%s: a relationship condition must name a character" % where)
+                if kind in ("level", "relationship") and (not isinstance(c.get("at_least"), (int, float)) or isinstance(c.get("at_least"), bool)):
+                    p.append("%s: a %s condition needs a number in at_least" % (where, kind))
         rewards = q.get("rewards", {})
         check_stacks(rewards.get("items"), "quest %s rewards" % q["id"])
         for stat in rewards.get("stats", {}):
