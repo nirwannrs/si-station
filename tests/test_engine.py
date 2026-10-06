@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 from aigame import battle  # noqa: E402
 from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
 from aigame.card import Card, CardError, check_card, import_card, list_cards, load_card, pack_card  # noqa: E402
-from aigame.state import effective_stat, new_game, reconcile  # noqa: E402
+from aigame.state import describe_states, effective_stat, new_game, reconcile  # noqa: E402
 
 CARD_DIR = os.path.join(ROOT, "cards", "rusty_lantern")
 
@@ -264,6 +264,33 @@ class EngineTest(unittest.TestCase):
         self.rejected(type="move", who="tobin", location="cellar")               # already there
         self.rejected(type="move", location="atlantis")                          # still has to be a real place
 
+    def test_a_reward_handed_over_in_the_story_is_the_one_already_paid(self):
+        """Seen in play: the quest paid two stars when it finished, and a turn later the story had
+        the reward presented, which the bookkeeper recorded as two more."""
+        self.test_quest_advances_then_completes_with_rewards()
+        gold, draughts = self.me["money"], self.me["inventory"].get("healing_draught", 0)
+        self.state["turn"] += 1
+        results = apply_actions(self.card, self.state, [{"type": "change_money", "who": "player", "amount": 15},
+                                                        {"type": "add_item", "who": "player", "item": "healing_draught", "qty": 1}])
+        self.assertEqual([r["message"] for r in results], ["Already given as the reward for The Missing Courier."] * 2)
+        self.assertEqual((self.me["money"], self.me["inventory"].get("healing_draught", 0)), (gold, draughts))
+        apply_actions(self.card, self.state, [{"type": "change_money", "who": "player", "amount": 15}])
+        self.assertEqual(self.me["money"], gold + 15)                  # it is only taken off once: this is new money
+
+    def test_only_the_very_reward_is_held_back(self):
+        """Seen with real models: a merchant's gift of 40 gold, soon after a 15 gold reward, must arrive whole."""
+        self.test_quest_advances_then_completes_with_rewards()
+        gold = self.me["money"]
+        apply_actions(self.card, self.state, [{"type": "change_money", "who": "player", "amount": 40}, {"type": "change_money", "who": "mira", "amount": 15}])
+        self.assertEqual(self.me["money"], gold + 40)
+        self.state["turn"] += 20                                       # long after, the same amount is simply new money
+        apply_actions(self.card, self.state, [{"type": "change_money", "who": "player", "amount": 15}])
+        self.assertEqual(self.me["money"], gold + 55)
+        state = new_game(self.card)
+        me = state["actors"]["player"]
+        apply_actions(self.card, state, [{"type": "change_money", "who": "player", "amount": 15}])
+        self.assertEqual(me["money"], new_game(self.card)["actors"]["player"]["money"] + 15)    # no quest was paid: nothing is held back
+
     def test_quest_advances_then_completes_with_rewards(self):
         self.rejected(type="quest_start", quest="missing_courier")
         self.assertIn("Find what the courier", self.ok(type="quest_advance", quest="missing_courier"))
@@ -313,6 +340,35 @@ class EngineTest(unittest.TestCase):
             self.assertIn(expected, problems)
 
     # malformed input from an LLM
+
+    def test_a_state_said_to_be_over_is_taken_as_cleared(self):
+        self.ok(type="set_state", who="tobin", state="Charging at Sekke", note="mid-match")
+        self.assertEqual(self.state["actors"]["tobin"]["states"]["charging_at_sekke"]["note"], "mid-match")
+        # What a model did in play: "updated" the state to say it had ended, instead of clearing it.
+        self.assertEqual(self.ok(type="set_state", who="tobin", state="Charging at Sekke", note="no longer charging; match over"), "Tobin is no longer charging at sekke.")
+        self.assertEqual(self.state["actors"]["tobin"]["states"], {})
+        # Cleared means gone: nothing of it is left on the character, and clearing it again finds nothing to clear.
+        self.assertIn("is not", self.rejected(type="clear_state", who="tobin", state="charging at sekke"))
+        self.ok(type="set_state", who="tobin", state="asleep", note="knocked over by the mare")          # "over" inside an ordinary note ends nothing
+        self.assertIn("asleep", self.state["actors"]["tobin"]["states"])
+        self.ok(type="set_state", who="mira", state="away", note="no longer at the inn")                # a new state is set whatever its note says
+        self.assertIn("away", self.state["actors"]["mira"]["states"])
+
+    def test_states_stack_and_each_ends_on_its_own(self):
+        mira = self.state["actors"]["mira"]
+        self.ok(type="set_state", who="mira", state="restrained", note="tied to a chair")
+        self.ok(type="set_state", who="mira", state="gagged", note="a rag in her mouth")
+        self.ok(type="set_state", who="mira", state="blindfolded")
+        self.assertEqual(sorted(mira["states"]), ["blindfolded", "gagged", "restrained"])
+        self.assertEqual(describe_states(mira), "Blindfolded, Gagged (a rag in her mouth), Restrained (tied to a chair)")
+        # Setting one she already has replaces its note; it does not add a second copy.
+        self.ok(type="set_state", who="mira", state="restrained", note="tied to a chair, no longer gagged")       # says the gag ended, not the ropes
+        self.assertEqual((len(mira["states"]), mira["states"]["restrained"]["note"]), (3, "tied to a chair, no longer gagged"))
+        self.assertEqual(self.ok(type="clear_state", who="mira", state="gagged"), "Mira Oakhand is no longer gagged.")
+        self.assertEqual(sorted(mira["states"]), ["blindfolded", "restrained"])                                    # the other two hold
+        self.ok(type="set_state", who="mira", state="gagged", note="gagged again")                                  # and a cleared state can begin again later
+        self.ok(type="set_state", who="mira", state="blindfolded", note="it is over")
+        self.assertEqual(sorted(mira["states"]), ["gagged", "restrained"])
 
     def test_malformed_actions_are_rejected_not_crashing(self):
         for action in ["eat stew", {}, {"type": "fly"}, {"type": "use_item"}, {"type": "use_item", "item": 5},

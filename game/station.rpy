@@ -44,11 +44,16 @@ label before_main_menu:
 ## Ren'Py runs this right after a save is loaded.
 label after_load:
     $ load_problem, load_notes = check_loaded_game()
+    if selftest_report_path():
+        $ selftest_after_load(load_problem)
     if load_problem:
         $ renpy.say(None, esc(load_problem))
         $ renpy.full_restart()
     if load_notes:
         $ renpy.say(None, esc("The card has changed since this save was made. " + " ".join(load_notes[:6])))
+    ## A text-only card's story is drawn by its own screen. A save from before that screen existed does not have it up.
+    if not load_problem and not current_card().visual:
+        show screen story_panel
     return
 
 init python:
@@ -68,10 +73,27 @@ init python:
         try:
             card = current_card()
         except aig_card.CardError:
-            return "This save belongs to a card that is no longer in the library (%s). Insert that card to play it." % store.card_name, []
+            ## A save remembers the name its card had in the library, and the same card can be there
+            ## under another name: a folder while it was being made, a .sicard file once exported and
+            ## imported. What identifies a card is its id, so look for it by that.
+            name = card_in_library(store.game_state.get("card_id"))
+            if name is None:
+                return "This save belongs to a card that is no longer in the library (%s). Insert that card to play it." % store.card_name, []
+            store.card_name = name
+            card = current_card()
         if card.id != store.game_state.get("card_id"):
             return "This save was made with a different card and cannot be played with this one.", []
         return None, aig_state.reconcile(card, store.game_state)
+
+    def card_in_library(card_id):
+        """The library name of the card with this id, or None. The inserted card is preferred if it is the one."""
+        inserted = inserted_card()
+        if inserted is not None and inserted.id == card_id:
+            return persistent.card
+        for entry in aig_card.list_cards(cards_dir()):
+            if entry["card"] is not None and entry["card"].id == card_id:
+                return entry["name"]
+        return None
 
     def inserted_card():
         """The inserted card, or None if there is none or it no longer loads."""

@@ -5,6 +5,8 @@ card and the current state, and either applied in full or rejected with a reason
 plain factual sentences because they are fed back to the narrator.
 """
 
+import re
+
 from .card import PLAYER, SLOTS
 from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
 from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
@@ -58,7 +60,7 @@ def apply_action(card, state, action, by_player=False):
     by_player marks something the player chose to do, by typing or by a button, as opposed to
     something the narrator says happened. Only the player's own choices are stopped by their states.
     """
-    handler = _HANDLERS.get(action.get("type")) if isinstance(action, dict) else None
+    handler = _HANDLERS.get(action["type"]) if isinstance(action, dict) and isinstance(action.get("type"), str) else None
     if handler is None:
         return {"action": action, "ok": False, "message": "Unknown action."}
     if state.get("battle") and action["type"] in ("move", "buy", "sell", "start_battle"):
@@ -85,6 +87,10 @@ def apply_action(card, state, action, by_player=False):
             # story's call, not the engine's. So this is neither applied nor refused: ok is None.
             return {"action": action, "ok": None, "message": "%s wants to go to %s, which is not next to %s. Whether and how they get there is for the story to decide." % (
                 player["name"], places(card, state)[wanted]["name"], here["name"])}
+    if not by_player:
+        counted = _paid_already(card, state, action)
+        if counted:
+            return {"action": action, "ok": True, "message": counted}
     feature = REQUIRES.get(action["type"])
     if feature and not card.has(feature):
         return {"action": action, "ok": False, "message": "This game does not use %s." % feature}
@@ -390,6 +396,45 @@ def _active_quest(card, state, a):
     return quest, progress
 
 
+REWARD_MEMORY = 15      # turns for which a reward handed over in the story is taken to be the one the game already paid
+
+
+def paid_lately(state):
+    """Quest rewards the game paid a short while ago and the story has not yet been seen to hand
+    over: [{"quest", "turn", "money", "stats": {id: amount}, "items": {id: qty}}]."""
+    return [p for p in state.get("paid", []) if state["turn"] - p["turn"] <= REWARD_MEMORY and (p["money"] or p["stats"] or p["items"])]
+
+
+def _paid_already(card, state, action):
+    """A quest's reward is paid by the game the moment the quest is finished. The story often shows
+    it being handed over afterwards (a ceremony, a purse pushed across the desk), and whoever
+    records the story may then report the same reward a second time. So a gain by the player that
+    is exactly a reward just paid, the same thing in the same amount, is that reward and is not
+    given again. It is only held back once. Any other amount is something else and goes through.
+
+    Returns what to tell the player, or None when the action is to be applied."""
+    kind = action.get("type")
+    try:
+        if kind not in ("change_money", "change_stat", "add_item", "create_item") or _who(state, action)[0] != PLAYER:
+            return None
+        if kind == "change_money":
+            where, key, amount = "money", None, _amount(action)
+        elif kind == "change_stat":
+            where, key, amount = "stats", _find(card.stats, action.get("stat"), "stat")[0], _amount(action)
+        else:
+            where, key, amount = "items", _find(all_items(card, state), action.get("item" if kind == "add_item" else "name"), "item")[0], _qty(action)
+    except Rejected:
+        return None
+    for paid in paid_lately(state):
+        if amount > 0 and amount == (paid["money"] if key is None else paid[where].get(key, 0)):
+            if key is None:
+                paid["money"] = 0
+            else:
+                del paid[where][key]
+            return "Already given as the reward for %s." % paid["quest"]
+    return None
+
+
 def _quest_advance(card, state, a):
     quest, progress = _active_quest(card, state, a)
     current = quest["stages"][progress["stage"]]
@@ -417,6 +462,12 @@ def _next_objective(card, state, quest, progress):
         got.append(_count(card.items[stack["item"]], stack.get("qty", 1)))
     for stat_id, amount in rewards.get("stats", {}).items():
         got.append(_change_stat(card, state, PLAYER, stat_id, amount))
+    if got:
+        state.setdefault("paid", []).append({
+            "quest": quest["title"], "turn": state["turn"], "money": rewards.get("money", 0) if card.has("money") else 0,
+            "stats": dict((stat_id, amount) for stat_id, amount in rewards.get("stats", {}).items() if amount > 0),
+            "items": dict((stack["item"], stack.get("qty", 1)) for stack in rewards.get("items", [])) if card.has("inventory") else {}})
+        state["paid"] = state["paid"][-5:]
     return "Quest completed: %s.%s" % (quest["title"], " Reward: %s." % ", ".join(got) if got else "")
 
 
@@ -532,6 +583,19 @@ def _change_relationship(card, state, a):
     return "%s's %s %s, now %s/100." % (who["name"], card.relationship_name.lower(), _signed(amount), _fmt(who["relationship"]))
 
 
+def _says_it_ended(name, note):
+    """Whether a note written on a state someone already has says that this very state is over.
+    "no longer charging" on "Charging at Sekke" does; "tied to a chair, no longer gagged" on
+    "Restrained" does not, since it is the gag that ended, not the ropes."""
+    note = note.strip().lower()
+    if re.match(r"^(it |this )?(is |has )?(now )?(over|ended|gone|cleared|none|no longer|not any ?more)\W*$", note):
+        return True
+    words = [w for w in re.findall(r"[a-z]+", name.lower()) if len(w) >= 4]
+    stems = "|".join(re.escape(w[:max(4, len(w) - 3)]) for w in words)        # "charging" also answers to "charge", "charged"
+    return bool(stems) and bool(re.search(r"\b(no longer|not any ?more|stopped|done)\b[\w ]{0,20}?\b(%s)" % stems, note))
+
+
+
 def _set_state(card, state, a):
     wid, who = _who(state, a)
     ref = a.get("state")
@@ -543,6 +607,11 @@ def _set_state(card, state, a):
         # A state the card never defined is still worth remembering; it just stops nothing.
         sid = "".join(c if c.isalnum() else "_" for c in ref.strip().lower()).strip("_") or "state"
     note = a.get("note") if isinstance(a.get("note"), str) else ""
+    if sid in who["states"] and _says_it_ended(who["states"][sid]["name"], note):
+        # Some models "update" a state to say it has ended instead of clearing it. Take it as meant:
+        # the state is removed, not kept with the note.
+        name = who["states"].pop(sid)["name"]
+        return "%s is no longer %s." % (who["name"], name.lower())
     who["states"][sid] = {"name": state_name(card, sid), "note": note.strip()[:200]}
     return "%s is now %s%s." % (who["name"], who["states"][sid]["name"].lower(), " (%s)" % who["states"][sid]["note"] if note.strip() else "")
 

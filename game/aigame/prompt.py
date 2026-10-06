@@ -7,7 +7,7 @@ are listed in HELPER_TASKS so the game can route each one to the main or the uti
 
 import re
 
-from .actions import shop_price
+from .actions import paid_lately, shop_price
 from .card import PLAYER
 from .llm import extract_json
 from . import journal
@@ -48,16 +48,16 @@ def uses(card, need):
 # What a player may do just by saying so. Anything else (finding items, gaining money, experience,
 # quest progress) has to come from the narrator, so "I find 1000 gold" cannot grant it.
 PLAYER_ACTIONS = (
-    ("use_item", "inventory", '{"type": "use_item", "item": ID}  eat, drink, read or otherwise use an item'),
-    ("use_item", "inventory", '{"type": "use_item", "item": ID, "target": CHARACTER_ID}  use an item on someone else'),
-    ("equip", "equipment", '{"type": "equip", "item": ID}  wear or wield an item'),
+    ("use_item", "inventory", '{"type": "use_item", "item": ID}  eat, drink, apply or otherwise use up an item, now. Showing it, holding it, looking at it, offering it, mentioning it or saying what one will do with it later is not using it'),
+    ("use_item", "inventory", '{"type": "use_item", "item": ID, "target": CHARACTER_ID}  use an item on someone else, now'),
+    ("equip", "equipment", '{"type": "equip", "item": ID}  put on an item or take it in hand to keep it there. Only when the player says they do so'),
     ("unequip", "equipment", '{"type": "unequip", "slot": SLOT}  take off what is in a slot (head, body, hands, feet, weapon, offhand, accessory)'),
-    ("transfer_item", "inventory", '{"type": "transfer_item", "item": ID, "qty": N, "to": CHARACTER_ID}  hand an item to a character'),
-    ("buy", "shops", '{"type": "buy", "shop": SHOP_ID, "item": ID, "qty": N}'),
-    ("sell", "shops", '{"type": "sell", "shop": SHOP_ID, "item": ID, "qty": N}'),
-    ("move", "map", '{"type": "move", "location": LOCATION_ID}  go to another location'),
-    ("use_skill", "skills", '{"type": "use_skill", "skill": SKILL_ID, "target": CHARACTER_ID}  use one of the player\'s skills; leave target out for a skill used on oneself'),
-    ("start_battle", "battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  attack someone or otherwise start a fight with them'),
+    ("transfer_item", "inventory", '{"type": "transfer_item", "item": ID, "qty": N, "to": CHARACTER_ID}  an item leaves the player\'s hands for good: given, handed over, paid with. Showing it to someone, holding it out to be looked at, or offering it and waiting for an answer is not handing it over'),
+    ("buy", "shops", '{"type": "buy", "shop": SHOP_ID, "item": ID, "qty": N}  the player buys, orders or pays for it now. Asking the price, asking what there is, haggling or saying they might buy is not buying'),
+    ("sell", "shops", '{"type": "sell", "shop": SHOP_ID, "item": ID, "qty": N}  the player sells it now. Asking what it would fetch is not selling'),
+    ("move", "map", '{"type": "move", "location": LOCATION_ID}  go to another location, now, in this message. Talking about going, suggesting it, agreeing to it or asking about it is not going'),
+    ("use_skill", "skills", '{"type": "use_skill", "skill": SKILL_ID, "target": CHARACTER_ID}  use one of the player\'s skills, now; leave target out for a skill used on oneself. Talking about a skill, describing it or threatening to use it is not using it'),
+    ("start_battle", "battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  the player strikes at someone or otherwise starts a fight with them, now. A threat, an insult, a warning or a hand on a weapon is not an attack'),
 )
 
 NARRATOR_ACTIONS = (
@@ -71,11 +71,11 @@ NARRATOR_ACTIONS = (
     ("skills", '{"type": "use_skill", "who": CHARACTER_ID, "skill": SKILL_ID, "target": WHO}  a character other than the player uses one of their skills'),
     ("skills", '{"type": "unlock_skill", "who": WHO, "skill": SKILL_ID}  someone learns a skill through the story'),
     ("levels", '{"type": "gain_xp", "who": WHO, "amount": N}  experience for something achieved: about 10 for a small success, 30 for a real fight or a clever solution, 100 for a major victory'),
-    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state: falls asleep, is tied up, leaves for a while. The note says how or by whom, in a few words. A state that is not in the list is allowed and simply remembered'),
+    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state, as [States] describes one: falls asleep, is taken prisoner, sinks into grief. state is an id from that list, or a short name of your own for another lasting condition. The note says how it came about or who caused it, in a few words'),
     ("states", '{"type": "clear_state", "who": WHO, "state": STATE_ID}  the state ends: they wake, break free, come back'),
     ("relationships", '{"type": "change_relationship", "who": CHARACTER_ID, "amount": N}  how that character feels about the player shifts: usually -5 to +5, up to 15 for a moment that truly matters'),
     ("battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  a fight breaks out with these characters. The game then runs the fight itself, blow by blow, so end your reply at the moment it starts: do not narrate blows, damage or who wins'),
-    ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  someone ends up in another location, by any means: walking, a portal, a carriage, being carried. Any location can be reached this way, not only neighbouring ones. Use one for each person who goes'),
+    ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  someone has arrived in another location by the end of the text, by any means: walking, a portal, a carriage, being carried. Any location can be reached this way, not only neighbouring ones. Use one for each person who went. Only for an arrival: a plan to go, an agreement to go, or a journey begun but not finished moves nobody'),
     ("new_places", '{"type": "create_location", "name": "...", "description": "...", "temporary": false}  the story has taken someone to a place that is not in the location list at all. Create it, then move them there using its name. Set temporary to true for a place that ceases to exist once everyone has left it (a pocket dimension, a dream, a sinking ship)'),
     ("map", '{"type": "reveal_location", "location": LOCATION_ID}  {{user}} learns that one of the places they do not know of exists and how to reach it: someone tells them, they find a map, they notice the door. It then appears on their map'),
     ("map", '{"type": "lock_travel", "reason": "..."}  {{user}} cannot leave this place for now; the game closes the map to them. The reason is one short sentence the player will see'),
@@ -97,8 +97,17 @@ def player_action_types(card):
 # (The wording for leaving a place is among the built-in prompts in wording.py.)
 
 
+# What a state is, said once and in the same words to whoever reads or records them. A model that
+# is only told "set a state when someone enters one" records every passing act as a state.
+STATE_MEANING = """\
+A state is something that is true of a character for a while. It began at some point, it is still going on, and it will stay true over the coming turns until something in the story ends it. It can be of the body (asleep, wounded, poisoned, exhausted), of their situation (tied up, kidnapped, in hiding, away on an errand, in disguise) or of the mind (grieving, furious with {{user}}, smitten, terrified). States are how the story remembers what someone is in the middle of, so that three turns later the sleeper is still asleep, the prisoner is still gone and the one in mourning has not cheerfully forgotten.
+What someone does in a moment is not a state: charging at an opponent, shouting, drawing a sword, answering a question, a flash of annoyance. The test is whether it would still be true several turns from now if nothing changed it. If not, it is simply part of the story.
+Someone can be in several states at once, and each is its own: a prisoner who is tied up, gagged and blindfolded is in three states, and taking the gag off ends one of them and leaves the other two. A state that has ended is removed; it is never kept on with a note saying it is over."""
+
+
 def states_reference(card, record=True):
-    """What each state means and stops. record is whether the reader is the one who sets and clears them."""
+    """What a state is, and what each of the card's states means and stops. record is whether the
+    reader is the one who sets and clears them."""
     if not uses(card, "states"):
         return ""
     lines = []
@@ -106,13 +115,20 @@ def states_reference(card, record=True):
         blocks = state.get("blocks", [])
         stops = "stops them doing anything" if "all" in blocks else "stops: " + ", ".join(blocks) if blocks else "stops nothing"
         lines.append("- %s. %s (%s%s)" % (_named(state), state.get("description", ""), stops, "; they are out of the scene" if state.get("away") else ""))
+    ## A name of the model's own stops nothing, so someone "kidnapped" under one would still be standing in the room.
+    leaving = [_named(state) for state in sorted(card.states.values(), key=lambda s: s["id"]) if state.get("away")]
+    gone = (" When what happens takes someone out of the scene (kidnapped, carried off, sent away, lost), use %s for it and say what happened in the note; a name of your own would leave them standing in the room." % " or ".join(leaving)) if leaving else ""
     duty = ("Keep them true: set a state when the story puts someone in it and clear it when the story ends it. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until you clear it."
-            if record else "The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until the story ends it.")
+            if record else "Write everyone as being in the states they are in. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until the story ends it.")
     return """
 
 [States]
+%s
 Each character's current states are in the game state. %s A character who is out of the scene cannot speak or act in it.
-""" % duty + "\n".join(lines)
+These states have rules in this game:
+%s
+Any other lasting condition can be a state as well, under a short name of two or three words ("grieving", "in disguise"). It stops nothing, but it is remembered.%s""" % (
+        STATE_MEANING, duty, "\n".join(lines), gone)
 
 
 def action_protocol(card, record=True, prompts=None):
@@ -147,11 +163,11 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
     if uses(card, "stats"):
         checks.append("- Costs and harm. If someone casts magic, uses an ability or exerts themselves and no result above already charged for it, lower the stat that fuels it (about 1 to 3 for something small, 4 to 6 for something solid, 8 or more for something great). If someone is hurt or healed, change the stat that measures it by a fitting amount.")
     if uses(card, "states"):
-        checks.append("- States. For every state the game state lists on anyone, decide whether it still holds at the end of the text and clear_state the ones that ended (they landed, woke, got free, came back). set_state the ones that began.")
+        checks.append("- States, as [States] below describes them. First go through every state the game state lists on anyone: does it still hold at the end of the text? clear_state each one that has ended (they woke, landed, got free, came back, calmed down). A state that is over is removed with clear_state, never kept with a note saying it is over. Then set_state what has begun, but only what passes the test there: a condition that will last, of body, situation or mind. A single act is not recorded.")
     if uses(card, "map"):
-        checks.append("- Places. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
+        checks.append("- Places. Move someone only when the text shows them arrived somewhere else by its end. People talking about going somewhere, deciding to, being invited to, getting ready to, or setting off without the text showing them arrive are all still where the game state has them, and nothing is recorded; they will be moved when a later text shows them there. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
     if uses(card, "inventory") or uses(card, "money"):
-        checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received. Only a change of hands counts: what someone is merely described as wearing, holding or working with is scenery, not a new item.")
+        checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received. Only a change of hands counts: what someone is merely described as wearing, holding or working with is scenery, not a new item, and what is promised, offered, owed or still to be collected has not changed hands yet.")
     if uses(card, "quests") and quests:
         checks.append("- Quests. Advance a quest only when its current objective is completely finished, every part of it; one that has begun or is going well is not finished. A quest whose \"Fails if\" has happened is failed; a quest the text gives the player is started.")
     if uses(card, "levels"):
@@ -162,11 +178,17 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
         checks.append("- Fights. If a fight breaks out in the text, start_battle with the characters fighting the player, and record nothing of the blows.")
     system = prompt_text(prompts, "record_changes", actions="\n".join(lines), checks="\n".join(checks),
                          states=states_reference(card, record=False).replace("{{user}}", "the player"))
+    paid = ["- %s: %s" % (p["quest"], ", ".join(
+                ["%s %s" % (_fmt(p["money"]), card.currency)] * bool(p["money"])
+                + ["%s %s" % (_fmt(n), card.stats[s]["name"]) for s, n in p["stats"].items() if n > 0 and s in card.stats]
+                + ["%s x%d" % (card.items[i]["name"], n) for i, n in p["items"].items() if n > 0 and i in card.items]))
+            for p in paid_lately(state)]
+    rewards = "[Quest rewards the game has already paid]\n%s\nIf the text shows one of these being handed over, announced or awarded, it is this same reward: record nothing for it.\n\n" % "\n".join(paid) if paid else ""
     already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
     earlier = "\n\n".join(t["narration"][-600:] for t in state["history"][-2:])
     user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
         describe_state(card, state, focus="%s\n%s" % (player_text, narration)), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
-        "[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else "", player_text, already, narration)
+        rewards + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 
@@ -201,16 +223,25 @@ def parse_judge(text, card):
     parsed = extract_json(text) or {}
     actions = []
     for verdict in parsed.get("verdicts") if isinstance(parsed.get("verdicts"), list) else []:
-        if not isinstance(verdict, dict) or verdict.get("quest") not in card.quests:
+        if not isinstance(verdict, dict) or not isinstance(verdict.get("quest"), str) or verdict["quest"] not in card.quests:
             continue
         if verdict.get("verdict") == "done" and isinstance(verdict.get("objective"), str):
             actions.append({"type": "quest_advance", "quest": verdict["quest"], "stage": verdict["objective"]})
         elif verdict.get("verdict") == "failed":
             actions.append({"type": "quest_fail", "quest": verdict["quest"]})
     for quest in parsed.get("start") if isinstance(parsed.get("start"), list) else []:
-        if quest in card.quests:
+        if isinstance(quest, dict):                 # some models answer {"quest": "id"} here too, the way verdicts are written
+            quest = quest.get("quest", quest.get("id"))
+        if isinstance(quest, str) and quest in card.quests:
             actions.append({"type": "quest_start", "quest": quest})
     return actions
+
+
+def answers_with(text, key):
+    """Whether a helper's reply is the JSON object it was asked for, with a list under key. A reply
+    that is not must not be mistaken for "nothing to report"."""
+    parsed = extract_json(text)
+    return isinstance(parsed, dict) and isinstance(parsed.get(key), list)
 
 
 def parse_bookkeeper(text):
@@ -644,7 +675,7 @@ def parse_resolver(text, card):
     allowed = player_action_types(card)
     actions = []
     for action in parsed.get("actions") if isinstance(parsed.get("actions"), list) else []:
-        if isinstance(action, dict) and action.get("type") in allowed:
+        if isinstance(action, dict) and isinstance(action.get("type"), str) and action["type"] in allowed:
             action = dict(action)
             action.pop("who", None)
             if action["type"] == "transfer_item":
@@ -759,7 +790,7 @@ def parse_whereabouts(text, card, state=None):
     known = places(card, state) if state else card.locations
     updates = []
     for entry in parsed.get("whereabouts") if isinstance(parsed.get("whereabouts"), list) else []:
-        if not isinstance(entry, dict) or entry.get("id") not in card.characters:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or entry["id"] not in card.characters:
             continue
         update = {"id": entry["id"]}
         if "location" in entry and (entry["location"] is None or entry["location"] == "here" or entry["location"] in known):
@@ -769,6 +800,24 @@ def parse_whereabouts(text, card, state=None):
         if len(update) > 1:
             updates.append(update)
     return updates
+
+
+def credible_whereabouts(card, state, text, updates):
+    """Drops what the scene director says about where someone went when the text gives it no way of
+    knowing: a character the text does not name and who is not with the player. A model asked
+    about everyone sometimes answers about everyone, and so sends off someone the player merely
+    walked away from. Being told someone is "here" is always allowed: that is how an unnamed
+    newcomer is recognised."""
+    named = set(named_in(card, text))
+    here = state["actors"][PLAYER]["location"]
+    kept = []
+    for update in updates:
+        actor = state["actors"].get(update.get("id"))
+        if actor is None:
+            continue
+        if "location" not in update or update["location"] == "here" or update["id"] in named or actor["location"] == here:
+            kept.append(update)
+    return kept
 
 
 def split_for_display(paragraph, limit=320):

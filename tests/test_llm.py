@@ -1,5 +1,6 @@
 """Run with: python3 -m unittest discover tests"""
 
+import copy
 import json
 import os
 import sys
@@ -664,12 +665,82 @@ class BookkeeperTest(unittest.TestCase):
         self.assertIn("<actions>", with_actions)
         self.assertLess(len(system), len(with_actions))                               # less for a small model to carry
 
+    def test_a_streamed_reply_reads_the_same_as_a_whole_one(self):
+        connection = {"provider": "nanogpt", "base_url": "", "api_key": "k"}
+        asked = llm.stream_request(connection, "m", "sys", [{"role": "user", "content": "hi"}], {"max_tokens": 50})["json"]
+        self.assertEqual((asked["stream"], asked["stream_options"]), (True, {"include_usage": True}))
+        self.assertNotIn("stream_options", llm.stream_request(dict(connection, provider="custom", base_url="http://x/v1"), "m", "s", [{"role": "user", "content": "hi"}])["json"])
+
+        reader = llm.StreamReader("nanogpt")
+        for line in (b': keep-alive', b'data: {"choices": [{"delta": {"role": "assistant", "content": ""}}]}', b'data: {"choices": [{"delta": {"content": "Rain "}}]}', b'',
+                     'data: {"choices": [{"delta": {"content": "falls."}}]}', b'data: not json', b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+                     b'data: {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4}}}', b'data: [DONE]'):
+            reader.feed(line)
+        self.assertEqual((reader.text, reader.done), ("Rain falls.", True))
+        whole = reader.data()
+        self.assertEqual(llm.chat_text("nanogpt", whole), "Rain falls.")
+        self.assertFalse(llm.chat_cut_short("nanogpt", whole))
+        self.assertEqual(llm.chat_usage("nanogpt", whole), {"input": 9, "cached": 4, "written": 0, "output": 3})
+        self.assertTrue(llm.chat_cut_short("nanogpt", reader.data(cut_off=True)))            # what arrived before a dropped connection is kept, marked as cut short
+
+        claude = llm.StreamReader("anthropic")
+        for line in ('event: message_start', 'data: {"type": "message_start", "message": {"usage": {"input_tokens": 5, "cache_read_input_tokens": 20}}}',
+                     'data: {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hmm"}}',
+                     'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Rain."}}',
+                     'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}', 'data: {"type": "message_stop"}'):
+            claude.feed(line)
+        self.assertEqual((llm.chat_text("anthropic", claude.data()), claude.done), ("Rain.", True))
+        self.assertEqual(llm.chat_usage("anthropic", claude.data()), {"input": 25, "cached": 20, "written": 0, "output": 2})
+        failed = llm.StreamReader("nanogpt")
+        failed.feed('data: {"error": {"message": "overloaded"}}')
+        self.assertRaises(llm.LLMError, llm.chat_text, "nanogpt", failed.data())
+
+    def test_a_judge_that_answers_in_an_odd_shape_does_not_stop_the_game(self):
+        """Seen in play: a model listed the quests to start as objects, and the turn crashed."""
+        quest = next(iter(self.card.quests))
+        odd = json.dumps({"verdicts": [{"quest": {"id": quest}, "verdict": "done", "objective": "x"}, {"quest": [quest], "verdict": "failed"}, "done"],
+                          "start": [{"quest": quest}, {"id": quest}, {"name": "?"}, [quest], 7, None, quest]})
+        self.assertEqual(prompt.parse_judge(odd, self.card), [{"type": "quest_start", "quest": quest}] * 3)
+
+    def test_the_director_cannot_move_someone_the_text_knows_nothing_of(self):
+        """Seen in play: the player walked to the stable, the text never mentioned Mira, and the
+        director reported her gone from the map."""
+        apply_actions(self.card, self.state, [{"type": "move", "location": "stable"}], by_player=True)
+        text = "You duck into the stable. Tobin looks up from the stall."
+        updates = [{"id": "tobin", "location": None, "note": "at the stall"}, {"id": "marsh_bandit", "location": "here"}, {"id": "mira", "location": None}, {"id": "mira", "note": "wiping the bar"}]
+        kept = prompt.credible_whereabouts(self.card, self.state, text, updates)
+        self.assertEqual([(u["id"], u.get("location", "-")) for u in kept], [("tobin", None), ("marsh_bandit", "here"), ("mira", "-")])
+        kept = prompt.credible_whereabouts(self.card, self.state, "Word comes that Mira Oakhand has left for the capital.", [{"id": "mira", "location": None}])
+        self.assertEqual(len(kept), 1)                                                # named in the text: believed
+
+    def test_an_unreadable_answer_is_not_taken_for_nothing_to_report(self):
+        """A helper that answers in prose, or with the wrong shape, has failed. Reading that as an
+        empty list let turns go through with their changes unrecorded."""
+        self.assertTrue(prompt.answers_with('{"actions": []}', "actions"))
+        self.assertTrue(prompt.answers_with('```json\n{"actions": [{"type": "move"}]}\n```', "actions"))
+        for bad in ("I'm sorry, I can't do that.", "", '{"actions": "none"}', '{"verdicts": []}', "[]", '{"actions"'):
+            self.assertFalse(prompt.answers_with(bad, "actions"), bad)
+        self.assertEqual(prompt.parse_bookkeeper("I'm sorry, I can't do that."), [])       # which is why the check has to come first
+
+    def test_the_models_are_told_what_a_state_is(self):
+        """A state is a lasting condition of body, situation or mind, not a single act. Both the
+        story model and the bookkeeper get the same explanation, with the test for telling them apart."""
+        for record in (True, False):
+            told = prompt.states_reference(self.card, record)
+            for part in ("true of a character for a while", "of the body (asleep", "of their situation (tied up, kidnapped", "of the mind (grieving",
+                         "What someone does in a moment is not a state", "would still be true several turns from now", "Any other lasting condition can be a state"):
+                self.assertIn(part, told)
+        system = prompt.bookkeeper_prompt(self.card, self.state, "I wait.", [], "Rain.")[0]
+        self.assertIn("never kept with a note saying it is over", system)
+        self.assertIn("A single act is not recorded", system)
+        self.assertLess(system.index("- States, as [States] below"), system.index("[States]\nA state is something"))
+
     def test_bookkeeper_is_given_everything_it_needs(self):
         apply_actions(self.card, self.state, [{"type": "set_state", "state": "airborne", "note": "on a broom"}])
         results = [{"ok": True, "message": "Traveler uses Quick Strike on Mira Oakhand."}]
         system, messages = prompt.bookkeeper_prompt(self.card, self.state, "I land and cast a light.", results,
                                                     "You touch down in the yard. A cold flicker of marsh-light leaves your fingers.")
-        for part in ["bookkeeper", '"type": "change_stat"', '"type": "clear_state"', '"type": "move"', "Costs and harm", "For every state the game state lists",
+        for part in ["bookkeeper", '"type": "change_stat"', '"type": "clear_state"', '"type": "move"', "Costs and harm", "go through every state the game state lists",
                      "the player ends the text somewhere other", "Do not record them again", "Restrained (restrained)", 'Reply with JSON only: {"actions": [ ... ]}']:
             self.assertIn(part, system, part)
         self.assertNotIn("{{user}}", system)

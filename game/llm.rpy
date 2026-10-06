@@ -79,6 +79,17 @@ init python:
         preset_edit = None
         # the same for one of the game's own prompts: {"key", "had", "before"}
         wording_edit = None
+        # The connection pool shared by every request. See http_session.
+        http = None
+        # Shown while a reply is awaited, when something worth knowing is going on (a connection being retried).
+        wait_note = ""
+        # How many words of the story reply have arrived so far, and whether the last one broke off because the connection went.
+        wait_words = 0
+        reply_dropped = False
+        # What a turn that failed part-way had already got from the models. See run_turn.
+        kept_turn = None
+        # the input area's layout the text-only story was last fitted to. See story_layout.
+        story_layout = None
         # what the last preset import did, shown on the Preset screen
         preset_message = ""
         # the same for the journal's "write one now", and the entry being edited: {"id", "before"}
@@ -203,14 +214,119 @@ init python:
 
     ## Calls.
 
+    ## Sending a request again by itself is only right when the first one cannot have been answered.
+    ## Otherwise the model writes the same reply twice: twice the wait, twice the cost, for nothing.
+    ## So a request is sent again only if the connection was never made at all, or if it failed so
+    ## soon that no reply can have been written yet. A connection that drops after a long wait is
+    ## never retried here: the reply may well exist, and it is the player's call to send again.
+    CONNECT_RETRIES = (1.0, 2.0, 4.0)   # how long to wait before each further go
+    ## How long a connection may take to be set up. A healthy one takes well under a second. One that
+    ## is going to fail tends to hang for a quarter of a minute first and then break in a way that
+    ## cannot be told from a reply lost on its way back, which must not be retried. Giving up on the
+    ## setting-up early turns that into a plain "never connected", which is safe to try again.
+    CONNECT_TIMEOUT = 6
+
+    def http_session():
+        """One connection pool for the whole game, so that the calls of a turn reuse a connection
+        that is already open where they can: every new connection is a new chance for it to fail."""
+        import requests
+        if runtime.http is None:
+            runtime.http = requests.Session()
+        return runtime.http
+    TOO_SOON_FOR_A_REPLY = 5.0          # seconds
+
+    def never_connected(error):
+        """Whether a failed request failed while the connection was still being set up, before a
+        single byte of it can have reached the provider."""
+        import requests
+        original = getattr(error, "original_exception", error)
+        if isinstance(original, requests.exceptions.ReadTimeout):
+            return False
+        if isinstance(original, (requests.exceptions.ConnectTimeout, requests.exceptions.SSLError, requests.exceptions.ProxyError)):
+            return True
+        text = str(original)
+        return isinstance(original, requests.exceptions.ConnectionError) and any(
+            sign in text for sign in ("Failed to establish a new connection", "Connection refused", "NameResolution", "nodename nor servname", "Name or service not known"))
+
+    def dropped(error):
+        """Whether a failed request lost its connection at some point that cannot be told: perhaps
+        before it was sent, perhaps while the reply was on its way back."""
+        import requests
+        original = getattr(error, "original_exception", error)
+        return isinstance(original, requests.exceptions.ConnectionError) and not isinstance(original, requests.exceptions.ReadTimeout)
+
+    def sent_with_care(send, threaded):
+        """Calls send() and returns what it returns. See the note above for when a failed request is
+        sent again without asking."""
+        import time
+        for go, wait in enumerate(CONNECT_RETRIES + (None,)):
+            started = time.time()
+            try:
+                result = send()
+                runtime.wait_note = ""
+                return result
+            except aig_llm.LLMError as e:
+                safe = getattr(e, "never_connected", False) or (getattr(e, "dropped", False) and time.time() - started < TOO_SOON_FOR_A_REPLY)
+                if wait is None or not safe:
+                    runtime.wait_note = ""
+                    if getattr(e, "dropped", False) and not safe:
+                        raise aig_llm.LLMError("The connection was lost after %d seconds of waiting for the reply. The provider may already have written it, "
+                                               "so the game has not sent the request again by itself. Send again when you are ready. (%s)" % (time.time() - started, e))
+                    raise
+            runtime.wait_note = "The connection to the provider failed before anything was sent. Trying again (%d of %d)..." % (go + 2, len(CONNECT_RETRIES) + 1)
+            if threaded:
+                time.sleep(wait)
+            else:
+                renpy.pause(wait, hard=True)
+
     def http_json(request, timeout, threaded=False):
         """Sends a request built by aig_llm and returns the decoded JSON body."""
+        return sent_with_care(lambda: http_json_once(request, timeout, threaded), threaded)
+
+    def unreachable(e):
+        error = aig_llm.LLMError(aig_llm.describe_http_error(None, None) + " " + str(e))
+        error.never_connected, error.dropped = never_connected(e), dropped(e)
+        return error
+
+    ## The story reply is asked for as a stream (see aigame/llm.py): it arrives as it is written, so
+    ## the connection is never left silent for the networks in between to drop, the player can see
+    ## that something is coming, and if the connection does go, what had arrived is not lost.
+    STREAM_SILENCE = 120        # seconds without a single piece before the reply is given up on
+    WORTH_KEEPING = 200         # characters; less than this of a broken-off reply is no reply
+
+    def http_stream_once(request, provider):
+        """Sends a streamed chat request and returns the reply in the shape of a whole one. Runs on a
+        thread. A reply that stops arriving part-way is returned as far as it got, marked "_dropped"."""
+        import requests
+        reader = aig_llm.StreamReader(provider)
+        runtime.wait_words = 0
+        try:
+            response = http_session().post(request["url"], json=request["json"], headers=request["headers"], timeout=(CONNECT_TIMEOUT, STREAM_SILENCE), stream=True)
+            if response.status_code >= 400:
+                raise aig_llm.LLMError(aig_llm.describe_http_error(response.status_code, response.text))
+            if "event-stream" not in (response.headers.get("Content-Type") or ""):
+                return response.json()          # an endpoint that ignores the request to stream and answers whole
+            for line in response.iter_lines():
+                if line:
+                    reader.feed(line)
+                    runtime.wait_words = reader.text.count(" ")
+        except aig_llm.LLMError:
+            raise
+        except Exception as e:
+            if len(reader.text.strip()) >= WORTH_KEEPING:
+                return dict(reader.data(cut_off=True), _dropped=True)
+            raise unreachable(e)
+        if reader.finish is None and not reader.error and len(reader.text.strip()) >= WORTH_KEEPING and not reader.done:
+            return dict(reader.data(cut_off=True), _dropped=True)       # the stream simply ended, with no word that the reply was complete
+        return reader.data()
+
+    def http_json_once(request, timeout, threaded=False):
         try:
             if threaded and not renpy.emscripten:
                 # renpy.fetch pumps the display while it waits, which is only safe on the main thread.
                 import requests
-                response = requests.request("POST" if "json" in request else "GET", request["url"],
-                                            json=request.get("json"), headers=request["headers"], timeout=timeout)
+                response = http_session().request("POST" if "json" in request else "GET", request["url"],
+                                                  json=request.get("json"), headers=request["headers"], timeout=(CONNECT_TIMEOUT, timeout))
                 if response.status_code >= 400:
                     raise aig_llm.LLMError(aig_llm.describe_http_error(response.status_code, response.text))
                 return response.json()
@@ -219,11 +335,11 @@ init python:
             response = getattr(e.original_exception, "response", None)
             if response is not None:
                 raise aig_llm.LLMError(aig_llm.describe_http_error(response.status_code, response.text))
-            raise aig_llm.LLMError(aig_llm.describe_http_error(None, None) + " " + str(e))
+            raise unreachable(e)
         except aig_llm.LLMError:
             raise
         except Exception as e:
-            raise aig_llm.LLMError(aig_llm.describe_http_error(None, None) + " " + str(e))
+            raise unreachable(e)
 
     def llm_call(slot, system, messages, sampling, threaded=False, what="story"):
         connection = request_connection(slot)
@@ -233,12 +349,71 @@ init python:
             card, state = current_card(), store.game_state
             system = aig_prompt.fill(card, state, system)
             messages = [dict(m, content=aig_prompt.fill(card, state, m["content"])) for m in messages]
-        request = aig_llm.chat_request(connection, llm_settings()["models"][slot]["model"].strip(), system, messages, sampling)
-        data = http_json(request, CHAT_TIMEOUT, threaded)
+        model = llm_settings()["models"][slot]["model"].strip()
+        request = aig_llm.chat_request(connection, model, system, messages, sampling)
+        whole = lambda: http_json(request, CHAT_TIMEOUT, False)
+        if threaded:
+            data = http_json(request, CHAT_TIMEOUT, True)
+        elif what == "story" and params().get("stream", True):
+            streamed = aig_llm.stream_request(connection, model, system, messages, sampling)
+            data = away_from_the_screen(lambda: sent_with_care(lambda: http_stream_once(streamed, connection["provider"]), True), whole)
+        else:
+            data = away_from_the_screen(lambda: http_json(request, CHAT_TIMEOUT, True), whole)
+        runtime.wait_words = 0
         runtime.usage = runtime.usage[-39:] + [dict(aig_llm.chat_usage(connection["provider"], data), what=what)]
         if what == "story":
             runtime.cut_short = aig_llm.chat_cut_short(connection["provider"], data)
+            runtime.reply_dropped = bool(isinstance(data, dict) and data.get("_dropped"))
         return aig_llm.chat_text(connection["provider"], data)
+
+    ## Waiting for a model. The request runs on another thread while this one looks in a few times a
+    ## second and otherwise sleeps. Ren'Py's own fetch keeps the whole screen redrawing as fast as it
+    ## can for as long as it waits, which is most of the time a turn takes: it had one processor core
+    ## flat out, and a laptop's fan running, for nothing.
+    WAIT_TICK = 0.25
+
+    def wait_for_threads(threads):
+        while any(thread.is_alive() for thread in threads):
+            renpy.pause(WAIT_TICK, hard=True)
+
+    def away_from_the_screen(work, on_this_thread):
+        """Runs work() on another thread and waits for it quietly; returns what it returned or raises
+        what it raised. Where that is not possible (the web build has no threads; a button's action
+        cannot wait this way), on_this_thread() is called instead."""
+        import threading
+        if renpy.emscripten or renpy.game.context().interacting:
+            return on_this_thread()
+        outcome = {}
+
+        def body():
+            try:
+                outcome["value"] = work()
+            except BaseException as e:
+                outcome["error"] = e
+
+        thread = threading.Thread(target=body)
+        thread.daemon = True
+        thread.start()
+        wait_for_threads([thread])
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
+    ## A helper's answer is only worth having if the game can read it. An answer that is not the JSON
+    ## it was asked for used to be taken as "nothing to report", so a turn could go through with its
+    ## changes silently unrecorded. Now such an answer counts as a failure: the helper is asked once
+    ## more, and if that fails too, the turn does not go through at all.
+    HELPER_TRIES = 2
+
+    def run_helper_sure(task, prompt, key, threaded=False):
+        """run_helper, insisting on a JSON answer with a list under key. Raises LLMError otherwise.
+        Only an answer that came back unreadable is asked for again. A call that failed outright is
+        not repeated here: whether that is safe is decided in http_json, which knows how it failed."""
+        for attempt in range(HELPER_TRIES):
+            reply = run_helper(task, prompt, threaded=threaded)
+            if aig_prompt.answers_with(reply, key):
+                return reply
+        raise aig_llm.LLMError("Its answer was not in the form the game reads.")
 
     def run_helper(task, prompt, sampling=HELPER_SAMPLING, threaded=False):
         """Runs one helper job on whichever model the player assigned to it. prompt is (system, messages)."""
@@ -264,32 +439,32 @@ init python:
         return lines
 
     def run_helpers_together(jobs):
-        """Runs several helper jobs at once and waits for them all. jobs maps a name to (task, prompt);
-        the result maps each name to the reply text, or to the error that job ended with.
+        """Runs several helper jobs at once and waits for them all. jobs maps a name to
+        (task, prompt, key), key being the list its JSON answer must have. The result maps each name
+        to the reply text, or to the error that job ended with.
 
         They only read the story, so nothing they do depends on another's answer, and running them
         side by side costs the player the wait of the slowest one, not of all of them added up.
         """
         answers = {}
 
-        def work(name, task, prompt, threaded):
+        def work(name, task, prompt, key, threaded):
             try:
-                answers[name] = run_helper(task, prompt, threaded=threaded)
+                answers[name] = run_helper_sure(task, prompt, key, threaded=threaded)
             except Exception as e:
                 answers[name] = e
 
         if renpy.emscripten or len(jobs) < 2:
-            for name, (task, prompt) in jobs.items():
-                work(name, task, prompt, False)
+            for name, (task, prompt, key) in jobs.items():
+                work(name, task, prompt, key, False)
             return answers
 
         import threading
-        threads = [threading.Thread(target=work, args=(name, task, prompt, True)) for name, (task, prompt) in jobs.items()]
+        threads = [threading.Thread(target=work, args=(name, task, prompt, key, True)) for name, (task, prompt, key) in jobs.items()]
         for thread in threads:
             thread.daemon = True
             thread.start()
-        while any(thread.is_alive() for thread in threads):
-            renpy.pause(0.05, hard=True)        # keeps the screen alive while waiting
+        wait_for_threads(threads)
         return answers
 
     def usage_brief():
@@ -628,55 +803,96 @@ init python:
         state.pop("undo_stack", None)
         state["restore_point"] = copy.deepcopy(state)
         card, preset = current_card(), active_preset()
+        keeper = bookkeeping()
+
+        ## A turn is several calls to models, and it either goes through whole or not at all: if any
+        ## part of it cannot be had, everything is put back and the player is told. What the models
+        ## had already answered is kept, though, so that sending the same thing again picks up where
+        ## it failed, and nothing is written, or paid for, a second time.
+        key = (state["turn"], len(state["history"]), text, resolve, keeper)
+        kept = runtime.kept_turn if runtime.kept_turn and runtime.kept_turn["key"] == key else {"key": key, "have": {}}
+        runtime.kept_turn = kept
+        have = kept["have"]
+
+        def once(name, ask):
+            if name not in have:
+                have[name] = ask()
+            return have[name]
+
+        stage = "work out what you are doing"
         try:
             ## A card with nothing the player can act on skips the call that works out their actions.
             attempts = []
             if resolve and aig_prompt.player_action_types(card):
-                attempts = aig_prompt.parse_resolver(run_helper("resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"])), card)
+                attempts = aig_prompt.parse_resolver(once("attempts", lambda: run_helper_sure(
+                    "resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"]), "actions")), card)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
 
-            keeper = bookkeeping()
             ## Whoever the player just named, or the last reply did, enters the story with this turn. The
             ## story model is told who they are in this turn's message, which is kept as it was sent.
             entering = aig_prompt.arrivals(card, state, text)
+            stage = "write the story"
             system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper)
-            reply = llm_call("main", system, messages, story_sampling())
+            reply, cut_short, broke_off = once("reply", lambda: (llm_call("main", system, messages, story_sampling()), runtime.cut_short, runtime.reply_dropped))
+            runtime.cut_short = cut_short
             narration, world_actions = aig_prompt.parse_narration(reply)
             narration = aig_prompt.fill(card, state, narration)     # in case the model wrote the placeholder back
             if not narration:
+                del have["reply"]
                 raise aig_llm.LLMError("The model returned no story text.")
             if keeper:
                 ## The story model only wrote prose. Two narrowly focused helpers read it at the same
                 ## time: the bookkeeper records what changed, and the quest judge alone decides whether
-                ## a quest has moved on. If the bookkeeper fails, anything the story model reported by
-                ## itself is used; if the judge fails, quests simply stay where they are this turn.
+                ## a quest has moved on. Both must answer, or the turn does not go through.
+                stage = "record what the reply changed"
                 judged = bool(card.quests)
-                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"]))}
+                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"]), "actions")}
                 if judged:
-                    jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration, prompts=preset["prompts"]))
-                answers = run_helpers_together(jobs)
-                if not isinstance(answers["books"], Exception):
-                    world_actions = aig_prompt.parse_bookkeeper(answers["books"])
+                    jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration, prompts=preset["prompts"]), "verdicts")
+                failed = {}
+                for name, answer in run_helpers_together(dict((name, job) for name, job in jobs.items() if name not in have)).items():
+                    if not isinstance(answer, Exception):
+                        have[name] = answer
+                    elif isinstance(answer, aig_llm.LLMError):
+                        failed[name] = answer
+                    else:
+                        raise answer
+                for name, who in (("books", "The bookkeeper"), ("quests", "The quest judge")):
+                    if name in failed:
+                        raise aig_llm.LLMError("%s: %s" % (who, failed[name]))
+                world_actions = aig_prompt.parse_bookkeeper(have["books"])
                 if judged:
                     ## Quests are the judge's alone. Anything else that tries to move one is ignored.
                     world_actions = [a for a in world_actions if not str(a.get("type", "")).startswith("quest_")]
-                if judged and not isinstance(answers["quests"], Exception):
-                    world_actions = world_actions + aig_prompt.parse_judge(answers["quests"], card)
+                    ## The judge's verdicts go first: a quest finished by this text pays its reward before
+                    ## the bookkeeper's report of the same reward being handed over is looked at.
+                    world_actions = aig_prompt.parse_judge(have["quests"], card) + world_actions
             results = results + aig_actions.apply_actions(card, state, world_actions)
+
+            state["pending_results"] = []
+            stage = "direct the scene"
+            direction = direct_scene(card, state, narration, once=once)
         except aig_llm.LLMError as e:
             restore_turn(state)
             state["open"] = False
             state["undo_stack"] = earlier_undo
-            store.turn_error = str(e)
+            if "reply" in have:
+                store.turn_error = ("The reply was written, but the game could not %s, so nothing has been changed. (%s) "
+                                    "Send the same message again: what was already done is kept and will not be done, or paid for, twice.") % (stage, e)
+            else:
+                store.turn_error = "The game could not %s, so nothing has been changed. (%s)" % (stage, e)
             store.draft = text
             return
 
-        state["pending_results"] = []
+        runtime.kept_turn = None
         turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "cast": entering,
-                "narration": narration, "direction": direct_scene(card, state, narration)}
+                "narration": narration, "direction": direction}
         ## Where the player was and who with when this turn began, for the journal to tell arrivals and reunions by.
         turn.update(aig_journal.scene_facts(state["restore_point"]))
-        if runtime.cut_short:
+        if broke_off:
+            turn["notice"] = ("The connection to the provider was lost while this reply was arriving, so it stops early. What had arrived is kept, "
+                              "and the game has recorded what it shows. Carry on from here, or undo the turn and send it again.")
+        elif runtime.cut_short:
             ## Kept apart from the results: it is for the player, and is never sent to the model.
             turn["notice"] = ("This reply was cut off at the response length limit (%d tokens), so it may end mid-sentence and "
                               "anything it changed at the very end may be missing. Raise Response length in Menu > Settings > Parameters.") % story_sampling()["max_tokens"]
@@ -772,17 +988,25 @@ init python:
         input_fields.clear()
         renpy.restart_interaction()
 
-    def direct_scene(card, state, narration):
+    def direct_scene(card, state, narration, once=None):
         """Works out who speaks in each paragraph and with what expression, and moves the characters
-        to wherever the text left them. Plain narration and nobody moved if the model fails."""
+        to wherever the text left them.
+
+        Within a turn (once is given) the director must answer, like every other part of the turn,
+        and LLMError is raised if it cannot. For the card's opening, which is shown either way, a
+        failure just leaves the text as plain narration with nobody moved."""
         paragraphs = aig_prompt.split_paragraphs(narration)
         if not card.characters:
             return aig_prompt.parse_direction("", card, len(paragraphs))
-        try:
-            reply = run_helper("direct_scene", aig_prompt.director_prompt(card, state, paragraphs, prompts=active_preset()["prompts"]))
-        except aig_llm.LLMError:
-            reply = ""
-        aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card, state))
+        ask = lambda: run_helper_sure("direct_scene", aig_prompt.director_prompt(card, state, paragraphs, prompts=active_preset()["prompts"]), "paragraphs")
+        if once is not None:
+            reply = once("direction", ask)
+        else:
+            try:
+                reply = ask()
+            except aig_llm.LLMError:
+                reply = ""
+        aig_state.track(card, state, aig_prompt.credible_whereabouts(card, state, narration, aig_prompt.parse_whereabouts(reply, card, state)))
         ## A line on how things stand, which the narrator is given back next turn. See describe_scene.
         state["scene"] = aig_prompt.parse_scene(reply)
         ## Places the text showed the player go on their map. The narrator hears of it next turn.
@@ -873,12 +1097,45 @@ init python:
             cast.append((c["id"], name, card_image(path) if path else None, (n + 1.0) / (len(present) + 1), dimmed))
         return cast
 
-    def scroll_to_newest(adjustment):
-        """Scrolls the text-only story log so the newest turn starts at the top of the view: the
-        player's own line first, then the reply, read downwards. Earlier turns are above it."""
-        box = renpy.get_widget("turn_input", "story_log_box")
-        if box is not None and getattr(box, "offsets", None):
-            adjustment.change(min(box.offsets[-1][1], adjustment.range))
+    PLAY_BAR_HEIGHT = 117
+    WAITING_HEIGHT = 110        # the strip a text-only card shows under its story while a reply is awaited
+
+    def story_gap():
+        """(top, height) of the space the play screen leaves for the story, in pixels, as last drawn.
+        While the play screen is not up (a reply is awaited), everything under the bar."""
+        layout = renpy.get_widget("turn_input", "play_layout")
+        offsets = getattr(layout, "offsets", None)
+        if offsets and len(offsets) >= 3:
+            top, bottom = int(offsets[2][1]), int(offsets[1][1])       # children are laid out in the order t, b, c
+            if bottom - top > 80:
+                return top, bottom - top
+        ## No input on screen: everything under the bar, less the strip that says a reply is on its way.
+        waiting = WAITING_HEIGHT if renpy.get_screen("thinking") else 0
+        return PLAY_BAR_HEIGHT, config.screen_height - PLAY_BAR_HEIGHT - waiting
+
+    def story_awaiting():
+        """What the player sent that is still being answered, or None. Shown under the story meanwhile."""
+        if renpy.get_screen("thinking") is None:
+            return None
+        sent = getattr(store, "player_text", "") or ""
+        return sent if sent and not sent.startswith("(") else ""
+
+    def story_newest():
+        """How far down the story the newest turn starts, in pixels, so that the view can open on it:
+        the player's own line first, then the reply, read downwards. None if that cannot be told."""
+        box = renpy.get_widget("story_panel", "story_log_box")
+        offsets = getattr(box, "offsets", None)
+        return offsets[-1][1] if offsets else None
+
+    def story_layout(typed=""):
+        """What decides how tall the input area of a text-only card is. When it changes, the story
+        above has to fit itself to the new gap, which it can only measure once the input has been
+        drawn; turn_input uses this to ask for one more look, once, and not by checking over and over."""
+        return (len(store.suggestions), bool(runtime.suggesting), bool(store.turn_error), typed.count("\n"), len(typed) // 40, len(store.game_state["history"]))
+
+    def story_refit(layout):
+        runtime.story_layout = layout
+        renpy.restart_interaction()
 
     def summarize_if_long(card, state, preset):
         """Folds the older half of the turns the model still sees into the summary. Skipped quietly if the model fails.
@@ -1097,11 +1354,39 @@ screen backdrop():
 
 screen thinking():
     if store.card_name and not current_card().visual:
-        use backdrop
-    frame:
-        align (0.5, 0.35)
-        padding (60, 40)
-        text _("The story continues...")
+        ## A text-only card keeps its story on screen while the reply is awaited, so the notice
+        ## takes the place of the input, under the story, and nothing is laid over the text.
+        ## The bar on top is shown without its buttons: nothing should be changed mid-turn.
+        frame:
+            xfill True
+            ysize PLAY_BAR_HEIGHT
+            padding (60, 20)
+            background "#000000b0"
+            vbox:
+                ## The same heights as the real bar, whose first row is as tall as its buttons, so nothing shifts when the input comes back.
+                fixed:
+                    ysize 48
+                    text esc(current_card().title) size 30 color "#cccccc" yalign 0.5
+                text esc(status_line()) size 24 color "#cccccc"
+        frame:
+            xfill True
+            yalign 1.0
+            ysize WAITING_HEIGHT
+            padding (60, 0)
+            background "#000000b8"
+            vbox:
+                yalign 0.5
+                text esc("The story continues..." + (("   %d words so far" % runtime.wait_words) if runtime.wait_words else "")) color "#cccccc"
+                if runtime.wait_note:
+                    text esc(runtime.wait_note) size 22 color "#ffb070"
+    else:
+        frame:
+            align (0.5, 0.35)
+            padding (60, 40)
+            vbox:
+                text esc("The story continues..." + (("   %d words so far" % runtime.wait_words) if runtime.wait_words else ""))
+                if runtime.wait_note:
+                    text esc(runtime.wait_note) size 22 color "#ffb070"
 
 
 ## A turn as text: what the player said, each paragraph with its speaker, then what changed.
@@ -1125,7 +1410,6 @@ screen turn_text(turn=None):
 ## Cards without assets get the story as a scrolling log on a plain background instead.
 screen turn_input():
     default typed = draft
-    default story_scroll = ui.adjustment()
     $ card = current_card()
 
     if card.visual:
@@ -1155,11 +1439,14 @@ screen turn_input():
 
     else:
         ## A text-only card is all story, so the story takes the whole screen: the bar on top, the
-        ## input at the bottom, and the text filling everything between. The picture behind stays
-        ## visible through the panel over it, which is dark enough that the picture does not compete with
-        ## the words; the text is outlined as well, for the bright parts of a picture.
-        use backdrop
+        ## input at the bottom, and the text filling everything between.
+        ##
+        ## The story itself is not drawn here. It is drawn by the story_panel screen underneath,
+        ## into the gap this layout leaves in the middle. Kept in this screen, every paragraph of
+        ## the story was laid out and drawn again for each key the player pressed (a third of a
+        ## second per letter with a long story); a screen of its own is drawn once and kept.
         side "t b c":
+            id "play_layout"
             xfill True
             yfill True
             use play_bar
@@ -1170,20 +1457,50 @@ screen turn_input():
                 vbox:
                     spacing 12
                     use turn_controls(typed)
-            frame:
+            ## The gap. It has to claim the space, or the layout closes up around nothing.
+            fixed:
                 xfill True
                 yfill True
-                padding (60, 18, 40, 10)
-                background "#000000b8"
-                viewport:
-                    style_prefix "story"
-                    yadjustment story_scroll
-                    scrollbars "vertical"
-                    mousewheel True
-                    draggable True
+        ## The input area has changed height (suggestions came, a line was added): once it has been
+        ## drawn, have the story above fit itself to the new gap. Once per change; nothing runs in between.
+        if story_layout(typed) != runtime.story_layout:
+            timer 0.05 action Function(story_refit, story_layout(typed))
+
+
+## The story of a text-only card, with the card's picture behind it. Shown by the script for as
+## long as such a card is being played, so it also stays up while a reply is awaited. It fits
+## itself into the gap the play screen leaves between its bar and its input.
+screen story_panel():
+    zorder -5
+    default story_scroll = ui.adjustment()
+    $ top, height = story_gap()
+    ## What the player has just sent, while its reply is awaited. It is not part of the story yet.
+    $ sent = story_awaiting()
+
+    use backdrop
+    frame:
+        xfill True
+        ypos top
+        ysize height
+        padding (60, 18, 40, 10)
+        background "#000000b8"
+        hbox:
+            style_prefix "story"
+            spacing 12
+            storyview:
+                adjustment story_scroll
+                ## Where the view settles each time it is drawn afresh: on the newest turn, or, while a
+                ## reply is awaited, at the very end, on what was last read and what was just sent.
+                where (None if sent is not None else story_newest)
+                version (len(game_state["history"]), game_state.get("summarized", 0), top, height, sent)
+                xsize 1786
+                vbox:
+                    spacing 30
                     use story_log(TEXT_MODE_TURNS)
-        ## Once the log has been laid out, bring the newest turn to the top of the view.
-        timer 0.05 action Function(scroll_to_newest, story_scroll)
+                    if sent:
+                        text rich("> " + sent) color "#aaaaaa"
+            vbar adjustment story_scroll style "vscrollbar" yfill True
+
 
 
 ## The bar across the top of the play screen: the card, the buttons, and how the player stands.

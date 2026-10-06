@@ -19,8 +19,11 @@ It has three parts, all in this repository:
    Nothing else needs installing.
    - **Windows:** run `SIStation.exe`.
    - **macOS:** open `SIStation.app`. The app is not signed with an Apple developer certificate,
-     so the first time macOS will refuse to open it: right-click (or Control-click) the app,
-     choose **Open**, then **Open** again. After that it opens normally.
+     so the first time macOS says it "could not verify SIStation is free of malware" and will
+     not open it. Click **Done**, then go to **System Settings > Privacy & Security**, scroll to
+     the Security section and click **Open Anyway** next to SIStation. Open the app once more
+     and confirm. This is needed only once. (Or, in Terminal:
+     `xattr -dr com.apple.quarantine /path/to/SIStation.app`.)
    - **Linux:** run `SIStation.sh`.
 2. Choose a card, then open **Menu > Settings > Models**, pick a provider, enter your API key and
    choose a model. Anthropic, OpenRouter, Nano-GPT, any OpenAI-compatible address and local

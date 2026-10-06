@@ -132,6 +132,91 @@ def chat_request(connection, model, system, messages, sampling=None):
     return {"url": base_url(connection) + "/chat/completions", "headers": headers, "json": body}
 
 
+# Streaming. A reply asked for whole arrives all at once at the end, after a silence as long as the
+# model takes to write it. A connection that sits silent for half a minute is one that networks
+# like to drop, and when it drops the reply is lost although it was written and paid for. Asked
+# for as a stream, the reply arrives piece by piece as it is written: the connection is never
+# silent, and whatever has arrived by the time anything goes wrong is kept.
+
+def stream_request(connection, model, system, messages, sampling=None):
+    """chat_request, asking for the reply as a stream."""
+    request = chat_request(connection, model, system, messages, sampling)
+    request["json"]["stream"] = True
+    if connection["provider"] in ("openrouter", "nanogpt"):
+        # Token counts come at the end of a stream only when asked for. Unknown endpoints may reject the field.
+        request["json"]["stream_options"] = {"include_usage": True}
+    return request
+
+
+class StreamReader(object):
+    """Takes the lines of a streamed reply as they arrive and builds the reply up from them.
+
+    feed(line) for each line; text is what has arrived so far; data() is the reply in the shape a
+    reply asked for whole would have had, so the rest of the game reads both the same way."""
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.text = ""
+        self.finish = None
+        self.usage = {}
+        self.error = None
+        self.done = False
+
+    def feed(self, line):
+        if isinstance(line, bytes):
+            line = line.decode("utf-8", "replace")
+        line = line.strip()
+        if not line.startswith("data:"):
+            return
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            self.done = True
+            return
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            return
+        if not isinstance(event, dict):
+            return
+        if event.get("error"):
+            self.error = event["error"]
+            return
+        if self.provider == "anthropic":
+            kind = event.get("type")
+            if kind == "message_start":
+                self.usage.update((event.get("message") or {}).get("usage") or {})
+            elif kind == "content_block_delta":
+                delta = event.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    self.text += delta.get("text") or ""
+            elif kind == "message_delta":
+                self.finish = (event.get("delta") or {}).get("stop_reason") or self.finish
+                self.usage.update(event.get("usage") or {})
+            elif kind == "message_stop":
+                self.done = True
+            return
+        for choice in event.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            piece = (choice.get("delta") or {}).get("content")
+            if isinstance(piece, str):
+                self.text += piece
+            if choice.get("finish_reason"):
+                self.finish = choice["finish_reason"]
+                self.done = True
+        if isinstance(event.get("usage"), dict):
+            self.usage = event["usage"]
+
+    def data(self, cut_off=False):
+        """The reply so far as a whole-reply body. cut_off marks one that stopped arriving before
+        it was finished, which the game treats like a reply that ran into its length limit."""
+        if self.error:
+            return {"error": self.error}
+        if self.provider == "anthropic":
+            return {"content": [{"type": "text", "text": self.text}], "stop_reason": "max_tokens" if cut_off else self.finish, "usage": self.usage}
+        return {"choices": [{"message": {"content": self.text}, "finish_reason": "length" if cut_off else self.finish}], "usage": self.usage}
+
+
 def chat_text(provider, data):
     """The reply text from a decoded response body."""
     if not isinstance(data, dict):

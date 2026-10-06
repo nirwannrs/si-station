@@ -23,6 +23,10 @@ define gui.show_name = True
 
 ## The version of the game.
 
+## The pointer stays visible. Ren'Py would hide it after half a minute without the mouse moving,
+## which is how long a reply can take, and this game is played with the mouse at rest and the keyboard in use.
+define config.mouse_hide_time = None
+
 define config.version = "1.0"
 
 

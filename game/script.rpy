@@ -29,6 +29,12 @@ label play:
     ## Waiting for the player from here. A save made at the input screen resumes at this line.
     $ open_turn()
 
+    ## The story of a text-only card is drawn by its own screen, kept up for as long as it is
+    ## played. It is shown after the line above, not before it: a loaded save carries on from that
+    ## line, and a save made before this screen existed does not have it up.
+    if not current_card().visual:
+        show screen story_panel
+
     ## A fight in a card that runs its own fights is played out on the battle screen; the story
     ## picks up again when it ends.
     if game_state["battle"]:

@@ -113,6 +113,11 @@ init python:
         store.game_state["pending_results"].extend(results)
         renpy.restart_interaction()
 
+    def drop_state(who, state_id):
+        """The player takes a state off someone: for one the story left behind after it ended."""
+        store.game_state["actors"][who]["states"].pop(state_id, None)
+        renpy.restart_interaction()
+
     def go_to(location_id):
         """The map's Go button. Travelling is part of the story, so it is played as a turn at once
         and the narrator gets to say what leaving means, instead of the scene carrying on regardless."""
@@ -303,7 +308,12 @@ screen hud(start="inventory"):
                                     bar value StaticValue(actor["relationship"], 100) xsize 360 yalign 0.5
                                     text esc("%s %g / 100" % (card.relationship_name, actor["relationship"])) size 26 yalign 0.5
                                 if card.has("states") and actor["states"]:
-                                    text esc(aig_state.describe_states(actor)) size 24 color "#ffb070"
+                                    ## One line per state, each with a way to take it off: a model sometimes leaves one behind after it has ended.
+                                    for state_id, held in sorted(actor["states"].items()):
+                                        hbox:
+                                            spacing 16
+                                            text esc(held["name"] + (" (%s)" % held["note"] if held.get("note") else "")) size 24 color "#ffb070" yalign 0.5
+                                            textbutton _("Remove") action Confirm(_("Remove this state? Use it when the story has moved on and the state was left behind."), Function(drop_state, c["id"], state_id)) text_size 20 yalign 0.5
                                 text esc(("Here with you. " if actor["location"] == me["location"] and not aig_state.is_away(card, actor) else "") + c["description"]) size 24 color "#aaaaaa"
                             if not [c for c in card.data.get("characters", []) if game_state["actors"][c["id"]].get("known", True)]:
                                 text _("You have not met anyone yet.")

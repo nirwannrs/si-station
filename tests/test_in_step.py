@@ -149,12 +149,13 @@ class EditablePromptsTest(unittest.TestCase):
         s = __import__("aigame.state", fromlist=["new_game"]).new_game(c)
         s["history"].append({"player": "hi", "results": [], "narration": "Rain."})
         results = [{"ok": True, "message": "Traveler buys stew."}]
+        paid = dict(s, paid=[{"quest": "The Missing Courier", "turn": s["turn"], "money": 15, "stats": {}, "items": {}}])
         sent = {
             "resolve_actions": [prompt.resolver_prompt(c, s, "I wait.")],
             "suggest_choices": [prompt.suggest_prompt(c, s, 3)],
             "summarize": [prompt.summary_prompt(c, s, s["history"])],
             "direct_scene": [prompt.director_prompt(c, s, ["Rain."])],
-            "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False)],
+            "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False), prompt.bookkeeper_prompt(c, paid, "I wait.", [], "Rain.")],
             "judge_quests": [prompt.judge_prompt(c, s, "I wait.", "Rain.")],
             "write_journal": [prompt.journal_prompt(c, s, s["history"])],
         }

@@ -37,6 +37,16 @@ jobs:
           curl -sSLf -o "$RUNNER_TEMP/renpy.tar.bz2" "https://www.renpy.org/dl/${RENPY}/renpy-${RENPY}-sdk.tar.bz2"
           tar -xjf "$RUNNER_TEMP/renpy.tar.bz2" -C "$RUNNER_TEMP"
 
+      # Plays through the game by itself, from source and inside a built Linux app: start, turns, undo,
+      # save, export and import of a card, the creator, loading the save. See tools/release_check.sh.
+      # It does not yet stop a release when it fails here, because it has never run on GitHub's
+      # machines, which have no screen; once it has passed there, remove continue-on-error.
+      - name: Release check
+        continue-on-error: true
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: tools/release_check.sh "$RUNNER_TEMP/renpy-${RENPY}-sdk"
+
       - name: Build the packages
         run: |
           "$RUNNER_TEMP/renpy-${RENPY}-sdk/renpy.sh" "$RUNNER_TEMP/renpy-${RENPY}-sdk/launcher" distribute "$GITHUB_WORKSPACE" \

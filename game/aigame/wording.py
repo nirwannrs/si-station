@@ -197,7 +197,7 @@ When events you narrate change the tracked state, end your reply with one block:
 <actions>{"actions": [ ... ]}</actions>
 Use only these, with ids from the state. WHO is "player" or a character id.
 {{actions}}
-Do not repeat anything already listed in the engine results. Leave the block out when nothing changes. The player never sees it.""")
+Report only what has actually happened in your text, not what is promised, planned or talked about. Do not repeat anything already listed in the engine results, and when a finished quest's reward listed there is later handed over in the story, that is the same reward: do not give it again. Leave the block out when nothing changes. The player never sees it.""")
 
 
 _builtin('leaving_prose', 'story', "When the player leaves a place (bookkeeper on)", "What walking out of a scene means. Only sent for cards with a map.",
@@ -217,15 +217,17 @@ You can also use lock_travel ahead of time, the moment a scene begins that {{use
 
 _builtin('resolve_actions', 'helper', "Understand what the player does", "Reads the player's message and lists the game actions they are attempting.",
          {'actions': 'the actions this card allows the player'}, """\
-You are the rules clerk of a text adventure. Read the player's message and list the game actions the player's character is attempting right now.
+You are the rules clerk of a text adventure. Read the player's message and list the game actions the player's character carries out in it. Most messages are talk and carry out none.
 
 Only these actions exist for the player:
 {{actions}}
 
 Rules:
 - Use ids from the game state. If the player names an item that is not in the state at all, use the player's own words as the item value; the engine will reject it.
-- List an attempt even when it looks impossible (the item is not in the inventory, there is not enough money). The engine decides. Never drop or correct an attempt.
+- List a real attempt even when it looks impossible (the item is not in the inventory, there is not enough money). The engine decides. Never drop or correct an attempt.
 - Speech, looking around, picking things up from the scene and anything else outside the list above produce no actions; the narrator handles them.
+- An action is listed only when the message says the player's character does it, now. Before listing one, check that the message is not merely talking about it. All of these are talk and produce no actions: a plan or intention ("I'll drink it once we're inside", "let's go to the stable later"), a suggestion or question ("shall we head out?", "should I use the potion?"), a condition ("if he attacks, I'll draw my sword"), an offer waiting for an answer ("want me to patch that up?"), a mention or a showing ("I show her the letter", "I still have that draught"), something in the past ("I bought this in the capital"), and anything said inside the character's speech that is not also done.
+- When it is unclear whether the player did it or only spoke of it, list nothing. The player can say so plainly next time; an action taken by mistake cannot be taken back.
 - Do not guess at things the player did not say.
 
 Reply with JSON only: {"actions": [ ... ]}. Use {"actions": []} when nothing applies.""")
@@ -242,7 +244,7 @@ Go through these every time:
 {{checks}}
 
 Rules:
-- Record what the text shows happening, not what might happen next or what someone only talks about.
+- Record only what the text shows has actually happened by its end. What is promised, offered, planned, expected, threatened, remembered or only talked about has not happened: record nothing for it, and it will be recorded when a later text shows it happen.
 - The engine results listed for this turn are already recorded. Do not record them again.
 - Use the exact ids from the game state. If the text names something that has no id, use the closest action that fits, or leave it out.
 - When nothing changed, the list is empty. That is a normal answer.{{states}}
@@ -277,7 +279,7 @@ You are the stage director of a visual novel. The narrator's latest text is give
 - expression: how that speaker looks while saying it, chosen only from that character's listed expressions. Use null when speaker is null.
 
 2. Where the characters are now. For each character whose place or activity the text changes or shows, give:
-- location: "here" if they end the text in the player's company; a location id if they went to or are at that place; null if they left for somewhere that is not on the list or are otherwise out of reach.
+- location: "here" if they end the text in the player's company; a location id if they have arrived at or are at that place by the end of the text; null if they left for somewhere that is not on the list or are otherwise out of reach. Someone who only talks of going somewhere, agrees to, or is about to, has not gone: leave their location out.
 - note: a few words on what they are doing or where they went, such as "tending the bar" or "rode off toward the capital".
 Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here".
 
@@ -340,6 +342,7 @@ _sends("resolve_actions", _HELPER,
 _sends("record_changes", _HELPER,
        ("[Current game state]", "the full state, after the player's own actions were applied") + _STATE,
        ("[Active quests]", "open quests and objectives; only when no quest judge is deciding them", "The card's quests, and the save for how far each has got.", "card:quests"),
+       ("[Quest rewards the game has already paid]", "the reward of a quest finished in the last few turns, so the story handing it over is not recorded as a second one; only when there is one", "The game: it pays a quest's reward the moment the quest is finished. The rewards are the card's.", "card:quests"),
        ("[Just before, already recorded; for context only]", "the end of the last two replies", "The save: the last 600 characters of each of the two replies before this one.", None),
        ("[Player's message]", "what the player just typed", "The player, this turn.", None),
        ("[Engine results already recorded this turn]", "what the game already applied, so it is not recorded twice; only when there is any", "The game: what it did with the player's own actions this turn, after Understand what the player does listed them.", "preset:helpers/resolve_actions"),
