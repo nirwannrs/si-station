@@ -837,7 +837,7 @@ function blocksPanel() {
     const details = el("details", { class: "item " + (own ? "yours" : "builtin") + (tick.checked ? "" : " off") }, summary, el("div", { class: "body" }, body));
     details.open = openItems.has("preset/" + block.id);
     details.addEventListener("toggle", () => (details.open ? openItems.add("preset/" + block.id) : openItems.delete("preset/" + block.id)));
-    return [details, block.slot === "history" && el("p", { class: "muted small divider", text: "Above the story: sent once and cached, so it costs little. Below it: sent again with every message, which costs a little each turn but is what models heed most." })];
+    return [details, block.slot === "history" && el("p", { class: "muted small divider", text: "Above the story: sent once and cached, so it costs little. Below it, the game's changing parts are sent just before what the player typed, and your own instructions just after it, as the very last thing the model reads. That costs a few tokens every turn and is what models heed most." })];
   });
   return el("div", { class: "list" },
     el("div", { class: "row preview" }, el("button", { class: "primary", type: "button", text: "Preview one turn as it is sent", onclick: turnPreview }),

@@ -33,6 +33,7 @@ default stage_speaker = None
 init python:
     import copy
     import json
+    from aigame import keystore as aig_keystore
     from aigame import llm as aig_llm
     from aigame import wording as aig_wording
     from aigame import prompt as aig_prompt
@@ -77,6 +78,10 @@ init python:
         preset_edit = None
         # the same for one of the game's own prompts: {"key", "had", "before"}
         wording_edit = None
+        # API keys, by connection id, while the game runs. They are never part of the saved settings:
+        # see the API keys section below. keys_stored is what the system's store holds, to know what changed.
+        keys = {}
+        keys_stored = {}
 
     runtime = Runtime()
 
@@ -104,6 +109,46 @@ init python:
 
     def slot_connection(slot):
         return llm_connection(llm_settings()["models"][slot]["connection"])
+
+    ## API keys. A key is kept by the operating system (aigame/keystore.py), not in the settings
+    ## Ren'Py saves, because those sit in the game's folder as a file anyone can read. The saved
+    ## settings keep an empty "api_key" for each connection; the real one lives in runtime.keys.
+
+    def key_name(connection_id):
+        return "connection:" + connection_id
+
+    def adopt_keys():
+        """At start: fetches each connection's key from the system's store. A key found in the saved
+        settings, from before keys were kept apart, is moved to the store and wiped from the settings."""
+        if renpy.android or renpy.ios or renpy.emscripten:
+            aig_keystore.setup(config.savedir)
+        moved = False
+        for connection in llm_settings()["connections"]:
+            name, old = key_name(connection["id"]), (connection.get("api_key") or "").strip()
+            kept = bool(old) and aig_keystore.put(name, old)
+            if kept:
+                connection["api_key"] = ""
+                moved = True
+            runtime.keys[connection["id"]] = old or aig_keystore.get(name)
+            ## If the store refused, the key stays in the settings for now and is offered to the store again later.
+            runtime.keys_stored[connection["id"]] = "" if old and not kept else runtime.keys[connection["id"]]
+        if moved:
+            renpy.save_persistent()
+
+    config.start_callbacks.append(adopt_keys)
+
+    def save_keys():
+        """Hands any key the player has typed or changed to the system's store."""
+        for connection_id, value in list(runtime.keys.items()):
+            value = value.strip()
+            if value != runtime.keys_stored.get(connection_id, "") and aig_keystore.put(key_name(connection_id), value):
+                runtime.keys_stored[connection_id] = value
+
+    def request_connection(slot):
+        """The slot's connection with its key filled in, for making a request. Never stored anywhere."""
+        connection = slot_connection(slot)
+        save_keys()
+        return dict(connection, api_key=runtime.keys.get(connection["id"], "") or connection.get("api_key", ""))
 
     def llm_ready():
         return bool(llm_settings()["models"]["main"]["model"].strip())
@@ -149,7 +194,7 @@ init python:
             raise aig_llm.LLMError(aig_llm.describe_http_error(None, None) + " " + str(e))
 
     def llm_call(slot, system, messages, sampling, threaded=False, what="story"):
-        connection = slot_connection(slot)
+        connection = request_connection(slot)
         if store.game_state is not None and store.card_name:
             ## Every prompt, whichever job built it, has the card's placeholders filled in here, so a
             ## raw {{user}} can never reach a model. Filling twice changes nothing.
@@ -775,7 +820,7 @@ init python:
 
     def load_models(slot):
         try:
-            request = aig_llm.models_request(slot_connection(slot))
+            request = aig_llm.models_request(request_connection(slot))
         except aig_llm.LLMError as e:
             return set_status(runtime.models, slot, str(e))
         set_status(runtime.models, slot, "Loading models...")
@@ -815,7 +860,7 @@ init python:
             # Not seen in a model list yet (the id was typed in): ask the provider once, quietly.
             runtime.context_lookup = key
             try:
-                request = aig_llm.models_request(slot_connection("main"))
+                request = aig_llm.models_request(request_connection("main"))
             except aig_llm.LLMError:
                 return
 
@@ -1095,7 +1140,7 @@ screen preset():
                                         textbutton _("Reset") action Confirm(_("Put this prompt back to its original wording?"), Function(wording_reset, entry["key"])) text_size 26 yalign 0.5
                                 text esc(entry["help"]) size 22 color "#999999"
 
-            text _("Instructions above the story are sent once and cached, so they cost little. A reminder after the story is sent with every message: it costs a few tokens each turn, but models pay it the most attention. The order matters most among the instructions themselves; the game always sends its changing parts (state, quests, lore) with the newest message.") size 22 color "#999999"
+            text _("Instructions above the story are sent once and cached, so they cost little. A reminder after the story is sent after your newest message, as the last thing the model reads: it costs a few tokens each turn, but models pay it the most attention. The order matters most among the instructions themselves; the game always sends its changing parts (state, quests, lore) with the newest message.") size 22 color "#999999"
 
 
 ## Editing one of the game's own prompts. Like preset_edit, it only reads.
@@ -1259,8 +1304,8 @@ screen models():
     tag menu
 
     ## A model id typed by hand is noticed when the player leaves this screen.
-    on "hide" action Function(sync_context_size)
-    on "replaced" action Function(sync_context_size)
+    on "hide" action [Function(sync_context_size), Function(save_keys)]
+    on "replaced" action [Function(sync_context_size), Function(save_keys)]
 
     use game_menu(_("Models"), scroll="viewport"):
         $ settings = llm_settings()
@@ -1324,7 +1369,8 @@ screen model_slot(slot, title, help):
                 for provider, name in aig_llm.PROVIDERS:
                     textbutton name action SetDict(connection, "provider", provider)
 
-            use settings_input(_("API key"), connection, "api_key", secret=True)
+            use settings_input(_("API key"), runtime.keys, connection["id"], secret=True)
+            text esc(aig_keystore.describe()) size 22 color "#999999"
             use settings_input(_("Address"), connection, "base_url", hint=aig_llm.DEFAULT_BASE_URLS[connection["provider"]])
 
         use settings_input(_("Model"), entry, "model", hint=suggested)

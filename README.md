@@ -24,8 +24,10 @@ It has three parts, all in this repository:
 Two sample cards are included: *The Rusty Lantern*, a full RPG with stats, skills, levels and
 turn-based fights, and *Quiet Hours*, a slice-of-life card that tracks nothing but friendships.
 
-Your API keys are kept in Ren'Py's own data folder on your computer, never in this project, in
-cards or in saves.
+Your API keys are handed to your operating system's own store for secrets (the Keychain on
+macOS, an account-encrypted file on Windows, the desktop's secret service on Linux) and are never
+written into this project, a card, a save or the game's saved settings. Where a system has no such
+store, they go into a private file outside the game folder that is scrambled, not encrypted.
 
 ## Making cards
 

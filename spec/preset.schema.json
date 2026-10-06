@@ -46,7 +46,7 @@
       "additionalProperties": { "type": "string" }
     },
     "blocks": {
-      "description": "Prompt is built top to bottom from enabled blocks, with one rule that overrides the order: the slots that change during play (summary, lorebook, state, quests) are always sent with the newest message, after the history. That keeps the start of the prompt identical from turn to turn, which is what lets providers cache it. Text blocks placed below the history slot are sent there too.",
+      "description": "Prompt is built top to bottom from enabled blocks, with one rule that overrides the order: the slots that change during play (summary, lorebook, state, quests) are always sent with the newest message, after the history. That keeps the start of the prompt identical from turn to turn, which is what lets providers cache it. Text blocks placed below the history slot are sent after the player's newest message, as the very last thing the model reads, every turn.",
       "type": "array",
       "items": {
         "type": "object",

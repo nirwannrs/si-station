@@ -539,8 +539,10 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
     that will be identical next turn; llm.chat_request turns that into the provider's own marker.
 
     Text blocks above the history slot and every unchanging slot form the system text, in preset
-    order. Text blocks below history and the changing slots are attached to the newest player
-    message. A block's role is not used yet: all blocks are sent as instructions.
+    order. The newest message is built in three parts: the changing slots (state, quests, lore),
+    then what the player said with the engine's results, then the text blocks placed below
+    history, so that a reminder is the last thing read. A block's role is not used yet: all blocks
+    are sent as instructions.
     """
     world = card.data["world"]
     me = state["actors"][PLAYER]
@@ -568,7 +570,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
-    stable, tail, history_on, below_history, has_protocol = [], [], False, False, False
+    stable, tail, closing, history_on, below_history, has_protocol = [], [], [], False, False, False
     for block in preset["blocks"]:
         slot = block.get("slot") if block["kind"] == "slot" else None
         if slot == "action_protocol":
@@ -580,7 +582,10 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
             continue
         text = slots[slot]() if slot else block.get("content", "")
         if text:
-            (tail if slot in VOLATILE_SLOTS or (not slot and below_history) else stable).append(text)
+            ## The changing parts (state, quests, lore) go in front of what the player just said. An
+            ## instruction placed below the story goes after it, as the very last thing the model
+            ## reads before it writes: that is where a reminder is heeded most.
+            (tail if slot in VOLATILE_SLOTS else closing if not slot and below_history else stable).append(text)
     if not has_protocol and action_protocol(card, record, preset.get("prompts")):
         stable.append(action_protocol(card, record, preset.get("prompts")))
 
@@ -589,7 +594,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
         messages.append({"role": "user", "content": _entering(card, turn.get("cast")) + _turn_message(turn["player"], turn["results"])})
         messages.append({"role": "assistant", "content": turn["narration"]})
     messages[-1]["cache"] = True
-    messages.append({"role": "user", "content": "\n\n".join(tail + [_entering(card, entering) + _turn_message(player_text, results)])})
+    messages.append({"role": "user", "content": "\n\n".join(tail + [_entering(card, entering) + _turn_message(player_text, results)] + closing)})
 
     return fill(card, state, "\n\n".join(stable)), [dict(m, content=fill(card, state, m["content"])) for m in messages]
 

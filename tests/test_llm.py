@@ -146,7 +146,8 @@ class PromptTest(unittest.TestCase):
         self.assertIn("stop at the first point where Ash would have to act", system)
         last = messages[-1]["content"]
         self.assertIn("Do not act, speak or decide for Ash", last)
-        self.assertTrue(last.index("Do not act, speak or decide for Ash") < last.index("I sit down."))      # the nudge sits right before the player's message
+        self.assertTrue(last.index("[Current game state]") < last.index("I sit down.") < last.index("Do not act, speak or decide for Ash"))
+        self.assertTrue(last.rstrip().endswith(self.preset["blocks"][-1]["content"].replace("{{user}}", "Ash")))      # the reminder is the very last thing the model reads
         self.assertTrue(last.index("[Current game state]") < last.index("(Reminder:"))
         for block in self.preset["blocks"]:
             if block["id"] in ("player_agency", "turn_reminder"):
