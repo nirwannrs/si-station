@@ -23,7 +23,11 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "game"))
 sys.path.insert(0, HERE)
 
-from aigame.card import BUILTIN_STATES, CAPABILITIES, EXTENSION, CardError, check_card, pack_card  # noqa: E402
+from aigame.card import BUILTIN_STATES, CAPABILITIES, EXTENSION, CardError, check_card, load_card, pack_card  # noqa: E402
+from aigame import llm as game_llm  # noqa: E402
+from aigame import prompt as game_prompt  # noqa: E402
+from aigame.state import new_game  # noqa: E402
+from aigame.wording import BUILTIN_PROMPTS, builtin_prompt, check_preset  # noqa: E402
 import freshness  # noqa: E402
 import sillytavern  # noqa: E402
 from templates import RULES, new_card, slug  # noqa: E402
@@ -34,6 +38,83 @@ ASSET = re.compile(r"^assets/[A-Za-z0-9_./-]+$")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 MAX_UPLOAD = 50 * 1024 * 1024
+PRESET_ENDING = ".preset.json"
+GAME_PRESET = os.path.join(ROOT, "presets", "default" + PRESET_ENDING)
+
+# What each built-in part of a preset is, for the builder. The names are the engine's (wording.SLOTS).
+SLOT_NOTES = {
+    "world": "The card's world and opening situation.",
+    "narrator_instructions": "The card creator's own guidance to the narrator.",
+    "persona": "Who the player is playing.",
+    "characters": "The card's cast.",
+    "action_protocol": "How the game's rules work. Always sent. Its wording can be changed on the next page, The game's rules.",
+    "history": "The story so far. Everything above it is sent once and cached; everything below is sent fresh each turn.",
+    "summary": "The summary of older turns, once there is one.",
+    "lorebook": "Background facts that have just become relevant.",
+    "state": "The scene and the game's current state: who is present, health, items, places.",
+    "quests": "Open quests and their objectives.",
+}
+
+
+def preview_prompt(card, preset, key):
+    """Exactly what the game would send for one of its own prompts, with this preset, a few turns
+    into a game of this card: {"system": text, "messages": [{"role", "content"}], "parts": {...}}.
+    The story and the player's lines are stand-ins; everything else is built by the game's own code."""
+    state = new_game(card)
+    state["history"].append({"player": "I step inside.", "results": [], "narration": "(An earlier reply by the story model.)"})
+    built = _preview_build(card, state, preset, key)
+    if built is None:
+        raise Refused(404, "No such prompt.")
+    return {"system": built[0], "messages": [{"role": m["role"], "content": m["content"]} for m in built[1]], "parts": preview_parts(card, state, preset, key)}
+
+
+# The story model a turn can be previewed for: provider name -> a model id that shows that provider's form of the request.
+PREVIEW_MODELS = {"openrouter": "anthropic/claude-opus-5.5", "nanogpt": "z-ai/glm-5.3", "anthropic": "claude-opus-5-5", "custom": "your-model", "local": "your-model"}
+
+
+def preview_turn(card, preset, provider, bookkeeper):
+    """The request the game would send to the story model for one turn, a few turns into a game of
+    this card: {"url", "request"}. It is made by the game's own code (the prompt builder, then the
+    provider adapter), so it is the real body: the same fields, the same order, the same cache marks.
+    The model name, the story and the player's lines are stand-ins, and no key is involved."""
+    if provider not in PREVIEW_MODELS:
+        raise Refused(400, "Unknown provider.")
+    state = new_game(card)
+    for said, reply in (("I step inside.", "(An earlier reply by the story model.)"), ("I look around.", "(The reply before this one.)")):
+        state["history"].append({"player": said, "results": [], "narration": reply})
+    results = [{"ok": True, "message": "(Something the game applied for the player this turn.)"}]
+    system, messages = game_prompt.narrator_prompt(card, state, preset, "I ask what is going on.", results, record=not bookkeeper)
+    connection = {"provider": provider, "base_url": "https://your-endpoint.example/v1" if provider == "custom" else "", "api_key": "(your key)"}
+    sent = game_llm.chat_request(connection, PREVIEW_MODELS[provider], system, messages, preset.get("sampling") or {})
+    return {"url": sent["url"], "request": sent["json"]}
+
+
+def _preview_build(card, state, preset, key):
+    said = "I look around and ask what is going on."
+    reply = "(The story model's reply would be here: a few paragraphs of story.)"
+    results = [{"ok": True, "message": "(Something the game applied for the player this turn.)"}]
+    prompts = preset.get("prompts") if isinstance(preset.get("prompts"), dict) else {}
+    if key in ("narrator_mechanics", "narrator_prose", "leaving_prose", "narrator_records", "leaving_records"):
+        return game_prompt.narrator_prompt(card, state, preset, said, results, record=key.endswith("records"))
+    return {
+        "resolve_actions": lambda: game_prompt.resolver_prompt(card, state, said, prompts=prompts),
+        "record_changes": lambda: game_prompt.bookkeeper_prompt(card, state, said, results, reply, quests=not card.quests, prompts=prompts),
+        "judge_quests": lambda: game_prompt.judge_prompt(card, state, said, reply, prompts=prompts),
+        "direct_scene": lambda: game_prompt.director_prompt(card, state, game_prompt.split_paragraphs(reply + "\n\n(Its second paragraph.)"), prompts=prompts),
+        "suggest_choices": lambda: game_prompt.suggest_prompt(card, state, (preset.get("suggestions") or {}).get("count", 3), prompts=prompts),
+        "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts),
+    }.get(key, lambda: None)()
+
+
+def preview_parts(card, state, preset, key):
+    """What the game puts in place of each {{part}} of one prompt, for this card: {name: text}.
+    Found by building the prompt once more with a wording that is nothing but the parts, fenced."""
+    names = list(builtin_prompt(key)["parts"])
+    if not names:
+        return {}
+    fenced = dict(preset, prompts=dict(preset.get("prompts") or {}, **{key: "".join("\x01%s\x02{{%s}}\x03" % (n, n) for n in names)}))
+    system = _preview_build(card, state, fenced, key)[0]
+    return dict((name, text.strip("\n")) for name, text in re.findall(r"\x01(\w+)\x02(.*?)\x03", system, re.S))
 
 
 class Refused(Exception):
@@ -45,9 +126,11 @@ class Refused(Exception):
 class Workspace(object):
     """The folder of card folders being edited, and where packed cards go."""
 
-    def __init__(self, cards, exports):
+    def __init__(self, cards, exports, presets=None):
         self.cards = cards
         self.exports = exports
+        # Presets are files, not folders: NAME.preset.json, in the folder the game reads them from.
+        self.presets = presets or os.path.join(os.path.dirname(cards), "presets")
 
     def folder(self, project):
         if not ID.match(project or ""):
@@ -127,6 +210,79 @@ class Workspace(object):
         name = card["meta"]["id"] + EXTENSION
         target = pack_card(self.folder(project), os.path.join(self.exports, name))
         return {"file": name, "size": os.path.getsize(target), "folder": self.exports}
+
+
+    # Presets. "default" is the game's own: it can be read and copied here, never changed, so
+    # there is always a known-good preset to go back to.
+
+    def preset_path(self, preset_id, must_exist=True):
+        if not ID.match(preset_id or ""):
+            raise Refused(404, "No such preset.")
+        path = os.path.join(self.presets, preset_id + PRESET_ENDING)
+        if must_exist and not os.path.isfile(path):
+            raise Refused(404, "No such preset.")
+        return path
+
+    def read_preset(self, preset_id):
+        with open(self.preset_path(preset_id), "rb") as f:
+            try:
+                return json.loads(f.read().decode("utf-8"))
+            except ValueError:
+                raise Refused(409, "That preset file is not valid JSON.")
+
+    def list_presets(self):
+        found = []
+        for name in sorted(os.listdir(self.presets)) if os.path.isdir(self.presets) else []:
+            preset_id = name[:-len(PRESET_ENDING)]
+            if not name.endswith(PRESET_ENDING) or not ID.match(preset_id):
+                continue
+            try:
+                preset = self.read_preset(preset_id)
+                found.append({"id": preset_id, "name": preset.get("name") or preset_id, "description": preset.get("description", ""),
+                              "problems": len(check_preset(preset)), "builtin": preset_id == "default"})
+            except Refused as e:
+                found.append({"id": preset_id, "name": preset_id, "description": str(e), "problems": 1, "builtin": preset_id == "default"})
+        return sorted(found, key=lambda p: (not p["builtin"], p["name"].lower()))
+
+    def write_preset(self, preset_id, preset):
+        """Saves the preset and returns what the game's checks say about it."""
+        if preset_id == "default":
+            raise Refused(403, "This is the game's own preset. Make a copy and change that.")
+        if not isinstance(preset, dict):
+            raise Refused(400, "A preset must be a JSON object.")
+        path = self.preset_path(preset_id)
+        with open(path + ".tmp", "wb") as f:
+            f.write((json.dumps(preset, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+        os.replace(path + ".tmp", path)
+        return check_preset(preset)
+
+    def create_preset(self, name, source=None):
+        """Makes a new preset as a copy of another (the game's own unless one is named) and returns its id."""
+        name = (name or "").strip() or "My preset"
+        if source:
+            preset = self.read_preset(source)
+        else:
+            with open(GAME_PRESET, "rb") as f:
+                preset = json.loads(f.read().decode("utf-8"))
+        base, preset_id, n = slug(name, "preset"), None, 1
+        while preset_id is None or preset_id == "default" or os.path.exists(self.preset_path(preset_id, must_exist=False)):
+            preset_id = base if n == 1 else "%s_%d" % (base, n)
+            n += 1
+        preset["name"] = name
+        if not os.path.isdir(self.presets):
+            os.makedirs(self.presets)
+        with open(self.preset_path(preset_id, must_exist=False), "wb") as f:
+            f.write(b"{}")
+        self.write_preset(preset_id, preset)
+        return preset_id
+
+    def trash_preset(self, preset_id):
+        if preset_id == "default":
+            raise Refused(403, "The game's own preset stays.")
+        bin_ = os.path.join(self.presets, ".trash")
+        if not os.path.isdir(bin_):
+            os.makedirs(bin_)
+        os.rename(self.preset_path(preset_id), os.path.join(bin_, "%s-%d%s" % (preset_id, int(time.time()), PRESET_ENDING)))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -212,6 +368,31 @@ class Handler(BaseHTTPRequestHandler):
                 ws.save_asset(project, card["characters"][0]["sprites"]["neutral"], avatar)
             return self.send_json({"id": project})
 
+        if parts == ["presets"] and method == "GET":
+            return self.send_json({"presets": ws.list_presets(), "folder": ws.presets, "wording": BUILTIN_PROMPTS, "slots": SLOT_NOTES})
+        if parts == ["presets"] and method == "POST":
+            wanted = self.json_body()
+            return self.send_json({"id": ws.create_preset(wanted.get("name"), wanted.get("copy_of"))})
+        if parts == ["preview"] and method == "POST":
+            # Shows the preset builder what a prompt looks like when it goes out. The preset is sent along, so unsaved edits count.
+            wanted = self.json_body()
+            preset = wanted.get("preset")
+            if not isinstance(preset, dict) or check_preset(preset):
+                raise Refused(409, "Fix the preset's problems first; the game cannot build a prompt from it as it is.")
+            card = load_card(ws.folder(wanted.get("card")))
+            if wanted.get("turn"):
+                return self.send_json(preview_turn(card, preset, wanted.get("provider") or "openrouter", wanted.get("bookkeeper", True) is not False))
+            return self.send_json(preview_prompt(card, preset, wanted.get("key")))
+        if len(parts) == 2 and parts[0] == "presets":
+            if method == "GET":
+                preset = ws.read_preset(parts[1])
+                return self.send_json({"preset": preset, "problems": check_preset(preset), "builtin": parts[1] == "default"})
+            if method == "PUT":
+                return self.send_json({"problems": ws.write_preset(parts[1], self.json_body())})
+            if method == "DELETE":
+                ws.trash_preset(parts[1])
+                return self.send_json({"ok": True})
+
         if len(parts) >= 2 and parts[0] == "projects":
             project, rest = parts[1], parts[2:]
             if not rest and method == "GET":
@@ -266,10 +447,11 @@ def main():
     parser.add_argument("--port", type=int, default=8770)
     parser.add_argument("--cards", default=os.path.join(ROOT, "cards"), help="folder of card folders to edit")
     parser.add_argument("--exports", default=os.path.join(ROOT, "exports"), help="where packed %s files are written" % EXTENSION)
+    parser.add_argument("--presets", default=None, help="folder of preset files; by default the presets folder next to the cards folder, where the game reads them")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    Handler.workspace = Workspace(os.path.abspath(args.cards), os.path.abspath(args.exports))
+    Handler.workspace = Workspace(os.path.abspath(args.cards), os.path.abspath(args.exports), args.presets and os.path.abspath(args.presets))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     address = "http://127.0.0.1:%d" % args.port
     print("SI-Station card creator is running at %s (Ctrl+C to stop)" % address)

@@ -16,6 +16,14 @@ let builtinStates = [];
 let lastImport = "";             // what the last lorebook import did, shown once after the redraw
 let saveTimer = null;
 let saving = Promise.resolve();
+let presetId = null;             // file name (without its ending) of the open preset; null while a card is open
+let preset = null;
+let presetBuiltin = false;       // the game's own preset: shown, never saved
+let presetSection = "instructions";
+let wording = [];                // every prompt the game writes itself: { key, reader, title, help, parts, text }
+let slotNotes = {};
+let previewCards = [];           // cards a prompt can be previewed with: [id, title]
+let previewCard = "";
 const openItems = new Set();     // which list entries are unfolded, by path
 const autoIds = new WeakSet();   // entries made this session whose id still follows their name
 
@@ -153,13 +161,16 @@ function showProblems() {
   const badge = document.querySelector(".badge");
   if (!badge) return;
   badge.className = "badge " + (problems.length ? "bad" : "ok");
-  badge.textContent = problems.length ? problems.length + (problems.length === 1 ? " problem" : " problems") : "Ready to play";
-  if (section === "export") renderSection();
+  badge.textContent = problems.length ? problems.length + (problems.length === 1 ? " problem" : " problems") : presetId ? "Ready to use" : "Ready to play";
+  badge.title = problems.join("\n");
+  if (presetId) { const list = document.querySelector(".preset-problems"); if (list) list.replaceWith(presetProblems()); }
+  else if (section === "export") renderSection();
 }
 
 function save() {
   clearTimeout(saveTimer);
   saveTimer = null;
+  if (presetId) return savePreset();
   const project = pid, body = pruned(card);
   setStatus("Saving...");
   saving = saving.then(() => api("PUT", `/api/projects/${project}`, body)).then((reply) => {
@@ -178,7 +189,7 @@ function changed(redraw) {
   setStatus("Editing...");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 500);
-  if (redraw) renderSection();
+  if (redraw) (presetId ? renderPreset() : renderSection());
 }
 
 // ---------- form fields
@@ -375,7 +386,7 @@ function renderFields(obj, fields, path, refresh, renamed) {
       case "sprites": return spritesField(obj, f);
       case "list": return listField(obj, f, path);
       case "group": return el("fieldset", {}, el("legend", { text: f.label }), f.help && el("p", { class: "muted small", text: f.help }),
-        renderFields(obj[f.k] || (obj[f.k] = {}), f.fields, `${path}/${f.k}`));
+        renderFields(f.flat ? obj : obj[f.k] || (obj[f.k] = {}), f.fields, `${path}/${f.k}`));     // flat: a box around fields of the same object
       case "custom": return f.render(obj);
       default: return inputField(obj, f, ctx);
     }
@@ -586,7 +597,13 @@ const SECTIONS = [
       { t: "text", k: "title", label: "Title", feeds: "id" },
       { t: "text", k: "id", label: "Id" },
       { t: "area", k: "description", label: "Description", rows: 2 },
-      { t: "bool", k: "auto_start", label: "Active from the start of the game", redraw: false },
+      { t: "bool", k: "auto_start", label: "Active from the start of the game", redraw: true },
+      { t: "group", k: "__when", label: "When it can begin", when: (q) => !q.auto_start, flat: true,
+        help: "Until a quest begins, the AI is only told about it when it can actually begin, so it does not start hinting at later parts of the story. Leave all three empty for a quest that can begin anywhere, at any time.", fields: [
+        { t: "select", k: "after", label: "Only after this quest is finished", options: (q) => named((card.quests || []).filter((other) => other !== q && other.id), "title") },
+        { t: "select", k: "giver", label: "Handed out by", options: O.characters },
+        { t: "select", k: "start_location", label: "Or begins at", options: O.locations, when: () => (card.locations || []).length },
+      ] },
       { t: "area", k: "fail_when", label: "What makes it fail (optional)", rows: 2, help: "Only the AI sees this. For example: the player leaves the exam grounds before the exam is over." },
       { t: "list", k: "stages", label: "Objectives, in order", keep: true, add: "Add an objective", make: () => ({ id: "", description: "" }), title: (s) => s.description, sub: (s) => s.id, fields: [
         { t: "text", k: "description", label: "What the player sees", feeds: "id" },
@@ -690,6 +707,329 @@ function exportPanel() {
       el("p", { class: "muted" }, "No need to pack. This card is saved as the folder ", el("code", {}, pid), " in the game's cards folder, so it already appears under Choose in SI-Station. Eject and insert it again to pick up changes.")));
 }
 
+// Every part of a preset page says which of two kinds it is, so there is no guessing what can be changed.
+const tag = (editable) => el("span", { class: "tag " + (editable ? "yours" : "builtin"), text: editable ? "Editable" : "Built in" });
+const legend = () => el("p", { class: "legend" }, tag(true), " is yours to write and is saved in this preset. ", tag(false), " is filled in by the game each time it is sent, and cannot be changed here.");
+
+// ---------- presets
+//
+// A preset is one file: the instructions the story model is given, the game's own prompts it
+// rewords, and starting values for sampling. It is edited the same way a card is: one object,
+// written to by the controls and saved after every change.
+
+function savePreset() {
+  const id = presetId, body = JSON.parse(JSON.stringify(preset));
+  if (presetBuiltin) return saving;
+  for (const key of ["sampling", "context", "suggestions", "prompts"]) if (body[key] && !Object.keys(body[key]).length) delete body[key];
+  setStatus("Saving...");
+  saving = saving.then(() => api("PUT", `/api/presets/${id}`, body)).then((reply) => {
+    if (id !== presetId) return;
+    problems = reply.problems;
+    setStatus("Saved");
+    showProblems();
+  }).catch((error) => setStatus("Not saved: " + error.message));
+  return saving;
+}
+
+function presetProblems() {
+  return el("div", { class: "preset-problems" }, problems.length > 0 && el("div", { class: "problems" },
+    el("b", {}, `${problems.length} thing${problems.length === 1 ? "" : "s"} to fix before the game can use this preset:`), el("ul", {}, problems.map((p) => el("li", { text: p })))));
+}
+
+async function copyPreset(source, name) {
+  await flush();
+  const made = await api("POST", "/api/presets", { name, copy_of: source });
+  location.hash = `#/preset/${made.id}/instructions`;
+}
+
+// The instructions, in the order they are sent. Text ones are the author's; the others are parts
+// the game fills in, which can only be moved or switched off.
+function blocksPanel() {
+  const blocks = preset.blocks;
+  const move = (index, step) => { [blocks[index], blocks[index + step]] = [blocks[index + step], blocks[index]]; changed(true); };
+  const add = (afterStory) => {
+    const taken = new Set(blocks.map((b) => b.id));
+    let n = 1;
+    while (taken.has(`custom_${n}`)) n++;
+    const block = { id: `custom_${n}`, name: "My instruction", kind: "text", content: "", enabled: true };
+    const story = blocks.findIndex((b) => b.slot === "history");
+    blocks.splice(afterStory || story < 0 ? blocks.length : story, 0, block);
+    openItems.add("preset/" + block.id);
+    changed(true);
+  };
+  const rows = blocks.map((block, index) => {
+    const own = block.kind === "text", fixed = block.slot === "action_protocol";
+    const tick = el("input", { type: "checkbox", disabled: fixed, title: "Use this" });
+    tick.checked = fixed || block.enabled !== false;
+    tick.addEventListener("click", (event) => event.stopPropagation());
+    tick.addEventListener("change", () => { block.enabled = tick.checked; changed(true); });
+    const title = el("span", { class: "title", text: block.name || block.id });
+    const sub = el("span", { class: "sub", text: own ? (block.content || "(empty)").slice(0, 90) : slotNotes[block.slot] || "" });
+    const button = (text, act, disabled) => el("button", { class: "quiet", type: "button", text, disabled, onclick: (event) => { event.preventDefault(); act(); } });
+    const summary = el("summary", {}, tick, title, tag(own), sub, button("Up", () => move(index, -1), index === 0), button("Down", () => move(index, 1), index === blocks.length - 1),
+      own && button("Remove", () => { if (confirm(`Remove "${block.name || block.id}"?`)) { blocks.splice(index, 1); changed(true); } }));
+    let body;
+    if (own) {
+      const name = el("input", { type: "text", value: block.name || "" });
+      name.addEventListener("input", () => { block.name = name.value; title.textContent = name.value || block.id; changed(false); });
+      const help = el("input", { type: "text", value: block.help || "" });
+      help.addEventListener("input", () => { set(block, "help", help.value); changed(false); });
+      const text = el("textarea", { rows: 7 });
+      text.value = block.content || "";
+      text.addEventListener("input", () => { block.content = text.value; sub.textContent = (text.value || "(empty)").slice(0, 90); changed(false); });
+      body = [labelled({ label: "Name" }, name), labelled({ label: "One-line note for players (optional)", help: "Shown under the name on the game's Preset screen." }, help),
+        labelled({ label: "What the story model is told", help: "A plain instruction. Use {{user}} for the player's name and {{currency}} for the card's money." }, text)];
+    } else {
+      body = [el("p", { class: "muted", text: (slotNotes[block.slot] || "") + " The game writes this part from the card and the save. Here you can only move it or switch it off." })];
+    }
+    const details = el("details", { class: "item " + (own ? "yours" : "builtin") + (tick.checked ? "" : " off") }, summary, el("div", { class: "body" }, body));
+    details.open = openItems.has("preset/" + block.id);
+    details.addEventListener("toggle", () => (details.open ? openItems.add("preset/" + block.id) : openItems.delete("preset/" + block.id)));
+    return [details, block.slot === "history" && el("p", { class: "muted small divider", text: "Above the story: sent once and cached, so it costs little. Below it: sent again with every message, which costs a little each turn but is what models heed most." })];
+  });
+  return el("div", { class: "list" },
+    el("div", { class: "row preview" }, el("button", { class: "primary", type: "button", text: "Preview one turn as it is sent", onclick: turnPreview }),
+      el("span", { class: "muted small", text: "The whole request for one turn, as JSON, exactly as the story model receives it." })),
+    legend(), rows,
+    el("div", { class: "row" }, el("button", { type: "button", text: "Add an instruction", onclick: () => add(false) }),
+      el("button", { type: "button", text: "Add a reminder after the story", onclick: () => add(true) })));
+}
+
+// The game's own prompts. Each shows the wording in use; typing in it makes it this preset's own,
+// and putting the original back removes it from the preset again.
+function wordingPanel(reader) {
+  return el("div", { class: "list" }, legend(), wording.filter((entry) => entry.reader === reader).map((entry) => {
+    const mine = () => (preset.prompts || {})[entry.key];
+    const title = el("span", { class: "title", text: entry.title }), sub = el("span", { class: "sub" }), warn = el("p", { class: "error small" });
+    const text = el("textarea", { rows: Math.min(24, Math.max(8, Math.ceil(entry.text.length / 110))), spellcheck: "false" });
+    const reset = el("button", { class: "quiet", type: "button", text: "Put the original back", onclick: () => { delete preset.prompts[entry.key]; text.value = entry.text; refresh(); changed(false); } });
+    const refresh = () => {
+      const own = mine() !== undefined;
+      sub.textContent = own ? "reworded in this preset" : "the game's own wording";
+      sub.className = "sub" + (own ? " changed" : "");
+      reset.hidden = !own;
+      const lost = Object.keys(entry.parts).filter((part) => !text.value.includes(`{{${part}}}`));
+      warn.textContent = lost.length ? `Your text no longer has ${lost.map((part) => `{{${part}}}`).join(", ")}. The game will add ${lost.length === 1 ? "it" : "them"} at the end; put ${lost.length === 1 ? "it" : "them"} back where ${lost.length === 1 ? "it belongs" : "they belong"} if that reads badly.` : "";
+    };
+    text.value = mine() ?? entry.text;
+    text.addEventListener("input", () => {
+      const prompts = preset.prompts || (preset.prompts = {});
+      if (!text.value.trim() || text.value === entry.text) delete prompts[entry.key]; else prompts[entry.key] = text.value;
+      refresh();
+      changed(false);
+    });
+    refresh();
+    const parts = Object.entries(entry.parts);
+    const details = el("details", { class: "item" }, el("summary", {}, title, sub),
+      el("div", { class: "body" }, el("p", { class: "muted", text: entry.help }),
+        el("div", { class: "sent" },
+          el("div", { class: "zone yours" },
+            el("div", { class: "step" }, tag(true), el("b", {}, reader === "helper" ? "1. The instruction" : "This wording"), el("span", { class: "muted small", text: entry.where })),
+            text, warn, reset,
+            parts.length > 0 && (() => {
+              const made = parts.map(([name, what]) => [explained(entry, `{{${name}}}`, entry.part_sources[name], (sent) => sent.parts[name] || null), what]);
+              return [el("p", { class: "small" }, tag(false), " inside your text: ", made.map(([piece, what], i) => [i > 0 && "; ", piece.chip, ` is ${what}`]),
+                ". Write around ", parts.length === 1 ? "it" : "them", " and leave ", parts.length === 1 ? "it" : "them", " where the list should appear; the game puts the list there. Click one to see what it holds."),
+                made.map(([piece]) => piece.box)];
+            })(),
+            entry.text.includes("JSON") && el("p", { class: "small", text: "Keep the part that says how to reply (the JSON shape). The game reads the reply by that shape, so a different shape means the reply is ignored." })),
+          entry.sends.length > 0 && el("div", { class: "zone builtin" },
+            el("div", { class: "step" }, tag(false), el("b", {}, "2. Sent under it, in this order"), el("span", { class: "muted small", text: "The game writes these each time. They are not part of the preset." })),
+            el("ol", { class: "sections" }, entry.sends.map((section) => {
+              const piece = explained(entry, section.heading, section, (sent) => sectionText(entry, section.heading, sent.messages[0].content));
+              return el("li", {}, piece.chip, " ", section.what, piece.box);
+            })),
+            el("p", { class: "muted small", text: "Click a section to see where it comes from and what it holds." })),
+          previewBox(entry))));
+    details.open = openItems.has("wording/" + entry.key);
+    details.addEventListener("toggle", () => (details.open ? openItems.add("wording/" + entry.key) : openItems.delete("wording/" + entry.key)));
+    return details;
+  }));
+}
+
+// A built-in piece of a prompt, as something to click: a [section] sent under the instruction, or
+// a {{part}} inside it. Opening it says where the piece comes from, where (if anywhere) it can be
+// changed, and shows what it holds right now for the card chosen for previews.
+function explained(entry, label, told, pick) {
+  const box = el("div", { class: "explain", hidden: true });
+  const chip = el("button", { class: "chip", type: "button", text: label, title: "Where does this come from?", onclick: async () => {
+    box.hidden = !box.hidden;
+    chip.classList.toggle("open", !box.hidden);
+    if (box.hidden) return;
+    const [kind, target] = (told.link || ":").split(":");
+    const cardTitle = (previewCards.find(([id]) => id === previewCard) || ["", "a card"])[1];
+    const pages = Object.fromEntries([...SECTIONS, ...PRESET_SECTIONS].map((s) => [s.id, s.title]));
+    const [page, item] = (target || "").split("/");
+    const where = kind === "card" ? (previewCard ? el("a", { href: `#/card/${previewCard}/${page}`, text: `Change it in the card editor, on the ${pages[page]} page (opens ${cardTitle})` }) : `Change it in the card editor, on the ${pages[page]} page.`)
+      : kind === "preset" ? el("a", { href: `#/preset/${presetId}/${target}`, text: item ? `It follows from another prompt: ${wording.find((e) => e.key === item).title}` : `Change it in this preset, on the ${pages[page]} page` })
+      : "This is the game's own. It cannot be changed from a preset or a card.";
+    const shown = el("pre", { class: "sent-text builtin", text: "Building..." });
+    box.replaceChildren(el("p", {}, el("b", {}, "Where it comes from. "), told.source), el("p", { class: "small" }, where),
+      el("div", { class: "sent-label", text: previewCard ? `What it holds right now, for ${cardTitle}` : "" }), previewCard ? shown : "");
+    if (!previewCard) return;
+    try {
+      const text = pick(await api("POST", "/api/preview", { preset, card: previewCard, key: entry.key }));
+      shown.textContent = text ?? "(Not sent for this card: it has nothing of this kind.)";
+    } catch (error) { shown.textContent = error.message; }
+  } });
+  if (openItems.delete(`explain/${entry.key}/${label}`)) setTimeout(() => chip.click(), 0);     // a link asked for it
+  return { chip, box };
+}
+
+// The text of one headed section of a message: from its heading to the next heading the job sends.
+function sectionText(entry, heading, message) {
+  const at = (h) => (message.startsWith(h + "\n") ? 0 : message.indexOf("\n" + h + "\n") + 1 || -1);
+  const start = at(heading);
+  if (start < 0) return null;
+  const later = entry.sends.map((s) => at(s.heading)).filter((index) => index > start);
+  return message.slice(start, later.length ? Math.min(...later) : undefined).trim();
+}
+
+// One whole turn, as the request the game sends to the story model, in a window over the page.
+// It is built by the game's own code from this preset as it stands, saved or not.
+function turnPreview() {
+  if (!previewCards.length) return alert("Make a card with no problems first; the preview is built from a real card.");
+  let provider = "openrouter", bookkeeper = true, json = "", unfolded = false;
+  // Strict JSON writes every line break inside a text as \n, which makes long instructions one unbroken block. Unfolding them is for reading only.
+  const draw = () => { body.textContent = unfolded ? json.replace(/\\n/g, "\n") : json; };
+  const body = el("pre", { class: "json" }), note = el("p", { class: "muted small" }), size = el("span", { class: "muted small" });
+  const close = () => { shade.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (event) => { if (event.key === "Escape") close(); };
+  const load = async () => {
+    body.textContent = "Building...";
+    try {
+      const sent = await api("POST", "/api/preview", { preset, card: previewCard, turn: true, provider, bookkeeper });
+      json = JSON.stringify(sent.request, null, 2);
+      draw();
+      note.textContent = `POST ${sent.url}`;
+      const text = JSON.stringify(sent.request);
+      size.textContent = `${sent.request.messages.length} messages, about ${Math.round(text.length / 3.5).toLocaleString()} tokens`;
+    } catch (error) { json = ""; body.textContent = error.message; note.textContent = ""; size.textContent = ""; }
+  };
+  const unfold = el("input", { type: "checkbox" });
+  unfold.addEventListener("change", () => { unfolded = unfold.checked; draw(); });
+  const tick = el("input", { type: "checkbox" });
+  tick.checked = true;
+  tick.addEventListener("change", () => { bookkeeper = tick.checked; load(); });
+  const copy = el("button", { type: "button", text: "Copy", onclick: async () => { await navigator.clipboard.writeText(json); copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy"), 1200); } });
+  const shade = el("div", { class: "shade", onclick: (event) => { if (event.target === shade) close(); } },
+    el("div", { class: "window" },
+      el("div", { class: "window-top" }, el("h3", { text: "One turn, as it is sent to the story model" }), el("button", { class: "quiet", type: "button", text: "Close", onclick: close })),
+      el("div", { class: "row" },
+        el("label", { class: "small" }, "Card", selectControl(previewCards, previewCard, false, (value) => { previewCard = value; load(); })),
+        el("label", { class: "small" }, "Sent to", selectControl([["openrouter", "OpenRouter"], ["nanogpt", "Nano-GPT"], ["anthropic", "Anthropic"], ["custom", "Custom (OpenAI-style)"], ["local", "Local"]], provider, false, (value) => { provider = value; load(); })),
+        el("label", { class: "check" }, tick, el("span", { text: "Player has the bookkeeper on" })),
+        el("label", { class: "check" }, unfold, el("span", { text: "Show line breaks (easier to read; Copy still gives exact JSON)" })),
+        copy, size),
+      note,
+      el("p", { class: "muted small", text: "This is the body of the request, made by the same code the game runs. The model name, the story so far and the player's lines are stand-ins; in a real game the player's own Parameters replace the sampling numbers. The last message is the one that changes every turn; everything before it is what providers cache." }),
+      body));
+  document.body.append(shade);
+  document.addEventListener("keydown", onKey);
+  load();
+}
+
+// Shows one prompt exactly as the game would send it, built by the game's own code from a real
+// card and this preset as it stands on the page, saved or not.
+function previewBox(entry) {
+  if (!previewCards.length) return el("p", { class: "muted small", text: "Make a card with no problems to see this prompt exactly as it is sent." });
+  const out = el("div");
+  const pick = selectControl(previewCards, previewCard, false, (value) => { previewCard = value; });
+  const show = el("button", { type: "button", text: "Show exactly what is sent", onclick: async () => {
+    out.replaceChildren(el("p", { class: "muted small", text: "Building..." }));
+    try {
+      const sent = await api("POST", "/api/preview", { preset, card: previewCard, key: entry.key });
+      const part = (label, content, editable) => [el("div", { class: "sent-label" }, tag(editable), " ", label), el("pre", { class: "sent-text " + (editable ? "yours" : "builtin"), text: content })];
+      out.replaceChildren(el("div", {}, el("p", { class: "muted small", text: "Lines in brackets that stand in for the story are placeholders; everything else is what the game sends." }),
+        entry.reader === "helper"
+          ? part("Instruction (system): your wording, with the game's lists put in", sent.system, true)
+          : part("The story model's instructions (system): this wording is one part of it, among the preset's instructions and the card", sent.system, true),
+        sent.messages.map((message, index) => part(`Message ${index + 1} of ${sent.messages.length}, from the ${message.role === "user" ? "player's side (user)" : "story model (assistant)"}`, message.content, false))));
+    } catch (error) { out.replaceChildren(el("p", { class: "error small", text: error.message })); }
+  } });
+  if (openItems.delete("preview/" + entry.key)) setTimeout(() => show.click(), 0);     // a link asked for it: #/preset/ID/helpers/KEY/preview
+  return el("div", { class: "preview" }, el("div", { class: "row" }, show, el("label", { class: "muted small" }, "using the card ", pick)), out);
+}
+
+const PRESET_SECTIONS = [
+  { id: "instructions", title: "Instructions", count: () => preset.blocks.filter((b) => b.kind === "text").length,
+    intro: "What the story model is told before it writes, top to bottom. Tick an instruction to use it, open it to change its wording, and use Up and Down to reorder. The greyed entries are parts the game fills in from the card and the save.",
+    render: () => [blocksPanel()] },
+  { id: "story", title: "The game's rules, as told to the story model", count: () => wording.filter((e) => e.reader === "story" && (preset.prompts || {})[e.key] !== undefined).length || "",
+    intro: "The game writes this part itself: it sits where the instruction list says \"Game mechanics\". Reword it when a model keeps misreading the rules. Which of these are sent depends on the card and on whether the player has the bookkeeper on.",
+    render: () => [wordingPanel("story")] },
+  { id: "helpers", title: "Helper jobs", count: () => wording.filter((e) => e.reader === "helper" && (preset.prompts || {})[e.key] !== undefined).length || "",
+    intro: "Each small job the helper model does is one call: an instruction you can reword, and under it the material the game sends for that job. Both are shown here in the order they go out. Every new helper job the game gains appears here by itself.",
+    render: () => [wordingPanel("helper")] },
+  { id: "settings", title: "About and starting values", intro: "The preset's name, and the values a player starts from. Players can change the numbers for themselves in the game, under Parameters.",
+    render: () => renderFields(preset, [
+      { t: "text", k: "name", label: "Name", help: "Shown on the game's Preset screen." },
+      { t: "area", k: "description", label: "Description", rows: 2 },
+      { t: "group", k: "sampling", label: "How the story model writes", help: "Leave a box empty to let the provider decide.", fields: [
+        { t: "number", k: "temperature", label: "Temperature (0 to 2; higher is more varied)" },
+        { t: "number", k: "max_tokens", label: "Response length, in tokens" },
+        { t: "number", k: "top_p", label: "Top P" },
+        { t: "number", k: "top_k", label: "Top K" },
+        { t: "number", k: "frequency_penalty", label: "Frequency penalty" },
+        { t: "number", k: "presence_penalty", label: "Presence penalty" },
+      ] },
+      { t: "group", k: "context", label: "Memory", fields: [
+        { t: "number", k: "max_context_tokens", label: "Context size, in tokens", help: "Only used when the game cannot tell what the chosen model can take." },
+        { t: "number", k: "summarize_after_turns", label: "Fold turns older than this into the summary (0 turns it off)" },
+      ] },
+      { t: "group", k: "suggestions", label: "Suggested replies", fields: [
+        { t: "bool", k: "enabled", label: "Offer suggested replies", default: true, redraw: false },
+        { t: "number", k: "count", label: "How many (1 to 6)" },
+      ] },
+    ], "preset") },
+];
+
+function renderPreset() {
+  const main = document.querySelector(".main");
+  if (!main) return;
+  const scroll = main.scrollTop;
+  const spec = PRESET_SECTIONS.find((s) => s.id === presetSection) || PRESET_SECTIONS[0];
+  const body = el("div", { class: presetBuiltin ? "readonly" : "" }, spec.render());
+  // The game's own preset is for reading: nothing in it can be changed, but looking at how a prompt is sent is still allowed.
+  if (presetBuiltin) for (const control of body.querySelectorAll("input, textarea, select, button")) if (!control.closest(".preview") && !control.classList.contains("chip")) control.disabled = true;
+  main.replaceChildren(el("div", { class: "section" }, el("h2", { text: spec.title }), el("p", { class: "intro", text: spec.intro }),
+    presetBuiltin && el("div", { class: "notice" }, el("p", { text: "This is the game's own preset. It can be read here but not changed, so there is always a known-good one to go back to." }),
+      el("button", { class: "primary", type: "button", text: "Make a copy to edit", onclick: () => copyPreset("default", "My preset").catch((error) => alert(error.message)) })),
+    presetProblems(), body));
+  main.scrollTop = scroll;
+  document.querySelector(".sidebar").replaceChildren(...PRESET_SECTIONS.map((s) =>
+    el("a", { class: s.id === presetSection ? "active" : "", href: `#/preset/${presetId}/${s.id}` }, s.title, s.count && el("span", { class: "count", text: s.count() }))));
+  document.querySelector(".topbar h1").textContent = preset.name || "Untitled preset";
+}
+
+async function openPreset(id, wanted, entry, preview) {
+  if (id !== presetId) {
+    await flush();
+    const [reply, shared, shelf] = await Promise.all([api("GET", `/api/presets/${id}`), api("GET", "/api/presets"), api("GET", "/api/projects")]);
+    previewCards = shelf.projects.filter((p) => !p.problems).map((p) => [p.id, p.title]);
+    if (!previewCards.some(([cardId]) => cardId === previewCard)) previewCard = (previewCards[0] || [""])[0];
+    pid = null; card = null;
+    presetId = id; preset = reply.preset; problems = reply.problems; presetBuiltin = reply.builtin;
+    wording = shared.wording; slotNotes = shared.slots;
+    preset.blocks = preset.blocks || [];
+    openItems.clear();
+    app.replaceChildren(el("div", { class: "editor" },
+      el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards and presets" }), el("h1"), el("span", { class: "status", text: presetBuiltin ? "Read only" : "Saved" }),
+        el("span", { class: "badge" }),
+        !presetBuiltin && el("button", { class: "button", type: "button", text: "Duplicate", onclick: () => copyPreset(presetId, (preset.name || "Preset") + " copy").catch((error) => alert(error.message)) })),
+      el("nav", { class: "sidebar" }), el("main", { class: "main" })));
+    showProblems();
+  }
+  presetSection = PRESET_SECTIONS.some((s) => s.id === wanted) ? wanted : "instructions";
+  // A link can name one entry to show unfolded: #/preset/ID/helpers/judge_quests
+  if (entry) openItems.add((presetSection === "instructions" ? "preset/" : "wording/") + entry);
+  if (entry && preview === "preview") openItems.add("preview/" + entry);
+  else if (entry && preview) openItems.add(`explain/${entry}/${decodeURIComponent(preview)}`);       // #/preset/ID/helpers/summarize/[New scenes]
+  document.querySelector(".main").scrollTop = 0;
+  renderPreset();
+  if (wanted === "instructions" && entry === "turn") turnPreview();          // a link asked for it: #/preset/ID/instructions/turn
+}
+
 // ---------- screens
 
 function renderSection() {
@@ -714,6 +1054,7 @@ function renderSidebar() {
 async function openEditor(project, wanted) {
   if (project !== pid) {
     await flush();
+    presetId = null; preset = null;
     const reply = await api("GET", `/api/projects/${project}`);
     pid = project; card = reply.card; problems = reply.problems;
     card.meta = card.meta || {}; card.world = card.world || {}; card.rules = card.rules || {}; card.rules.stats = card.rules.stats || []; card.characters = card.characters || [];
@@ -730,7 +1071,7 @@ async function openEditor(project, wanted) {
     dropMissingStats();
     if (JSON.stringify(card) !== repaired) setTimeout(() => changed(false), 0);
     app.replaceChildren(el("div", { class: "editor" },
-      el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards" }), el("h1"), el("span", { class: "status", text: "Saved" }),
+      el("div", { class: "topbar" }, el("a", { class: "button", href: "#/", text: "All cards and presets" }), el("h1"), el("span", { class: "status", text: "Saved" }),
         el("button", { class: "badge", onclick: () => { location.hash = `#/card/${pid}/export`; } }),
         el("a", { class: "button", href: `#/card/${project}/export`, text: "Export" })),
       el("nav", { class: "sidebar" }), el("main", { class: "main" })));
@@ -743,8 +1084,13 @@ async function openEditor(project, wanted) {
 
 async function openHome() {
   await flush();
-  pid = null; card = null;
-  const [{ projects, folder }] = await Promise.all([api("GET", "/api/projects")]);
+  pid = null; card = null; presetId = null; preset = null;
+  const [{ projects, folder }, shelf] = await Promise.all([api("GET", "/api/projects"), api("GET", "/api/presets")]);
+  const presetName = el("input", { type: "text", placeholder: "Name of your preset" });
+  const presetFrom = el("select", {}, shelf.presets.map((p) => el("option", { value: p.id, text: "Copy of " + p.name })));
+  const makePreset = async () => {
+    try { await copyPreset(presetFrom.value || undefined, presetName.value); } catch (problem) { error.textContent = problem.message; }
+  };
   const title = el("input", { type: "text", placeholder: "Name of your card" });
   const template = el("select", {}, el("option", { value: "casual", text: "Casual / Slice of Life" }), el("option", { value: "rpg", text: "Classic RPG" }), el("option", { value: "blank", text: "Blank" }));
   const error = el("p", { class: "error" });
@@ -777,13 +1123,27 @@ async function openHome() {
       el("div", { class: "row" }, el("label", {}, "Title", title), el("label", {}, "Starting point", template), el("button", { class: "primary", text: "Create", onclick: create }))),
     el("div", { class: "panel" }, el("h3", { text: "Import a SillyTavern character" }),
       el("p", { class: "muted small", text: "A character card as a PNG or JSON file. It becomes a casual card with that one character and its lorebook; you add places, items and the rest here." }), picker),
-    error, el("p", { class: "muted small" }, "Cards are kept in ", el("code", {}, folder))));
+    el("header", { class: "second" }, el("h1", { text: "Presets" })),
+    el("p", { class: "muted" }, "A preset is what the models are told, for any card: the instructions to the story model, the wording of the game's own rules, and the prompt of each helper job. Players pick one on the game's Preset screen."),
+    el("div", { class: "cards" }, shelf.presets.map((p) => el("div", { class: "card-tile", onclick: () => { location.hash = `#/preset/${p.id}/instructions`; } },
+      el("h3", { text: p.name }), p.builtin && el("span", { class: "muted small", text: "comes with the game" }), el("span", { class: "small", text: p.description }),
+      el("div", { class: "row" }, el("span", { class: "small " + (p.problems ? "error" : "muted"), text: p.problems ? `${p.problems} to fix` : "Ready to use" }),
+        !p.builtin && el("button", { class: "quiet", text: "Move to trash", onclick: async (event) => {
+          event.stopPropagation();
+          if (!confirm(`Move "${p.name}" to the trash? It goes to the .trash folder inside the presets folder, not deleted.`)) return;
+          await api("DELETE", `/api/presets/${p.id}`);
+          openHome();
+        } }))))),
+    el("div", { class: "panel" }, el("h3", { text: "Make a new preset" }), el("p", { class: "muted small", text: "A new preset starts as a copy of another, so it works from the first moment." }),
+      el("div", { class: "row" }, el("label", {}, "Name", presetName), el("label", {}, "Starting point", presetFrom), el("button", { class: "primary", text: "Create", onclick: makePreset }))),
+    error, el("p", { class: "muted small" }, "Cards are kept in ", el("code", {}, folder), ", presets in ", el("code", {}, shelf.folder))));
 }
 
 async function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   try {
     if (parts[0] === "card" && parts[1]) await openEditor(parts[1], parts[2]);
+    else if (parts[0] === "preset" && parts[1]) await openPreset(parts[1], parts[2], parts[3], parts[4]);
     else await openHome();
   } catch (error) {
     app.replaceChildren(el("div", { class: "home" }, el("p", { class: "error", text: error.message }), el("a", { class: "button", href: "#/", text: "All cards" })));

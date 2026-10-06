@@ -133,7 +133,7 @@ class SessionTest(unittest.TestCase):
         self.proc.stdin.flush()
         replies = [json.loads(self.proc.stdout.readline()) for _ in range(2)]
         self.assertEqual([r["id"] for r in replies], [101, 102])
-        self.assertEqual(len(replies[0]["result"]["tools"]), 10)
+        self.assertEqual(len(replies[0]["result"]["tools"]), 15)
         self.assertNotEqual(hello(), first)                                 # now running the new code
         self.assertEqual(self.call("get_card", card="rusty_lantern", path="meta.title")[1]["value"], "Before")   # and the work is still there
         self.assertIsNone(self.proc.poll())
@@ -145,7 +145,8 @@ class SessionTest(unittest.TestCase):
         self.send("notifications/initialized", notify=True)
         self.assertEqual(self.send("ping")["result"], {})
         tools = self.send("tools/list")["result"]["tools"]
-        self.assertEqual([t["name"] for t in tools], ["card_format", "list_cards", "get_card", "create_card", "edit_card", "replace_card", "add_image", "import_lorebook", "pack_card", "trash_card"])
+        self.assertEqual([t["name"] for t in tools], ["card_format", "list_cards", "get_card", "create_card", "edit_card", "replace_card", "add_image", "import_lorebook", "pack_card", "trash_card",
+                                                    "preset_format", "list_presets", "get_preset", "save_preset", "trash_preset"])
         self.assertTrue(all(t["description"] and t["inputSchema"]["type"] == "object" for t in tools))
 
         failed, fmt = self.call("card_format")
@@ -193,6 +194,27 @@ class SessionTest(unittest.TestCase):
             self.assertTrue(self.call(tool, **args)[0], (tool, args))
         failed, gone = self.call("trash_card", card="moon_base")
         self.assertEqual(os.listdir(gone["moved_to"])[0].split("-")[0], "moon_base")
+
+        # Presets: read the format, make one with a reworded helper prompt, and be told what is wrong with a bad one.
+        failed, format_ = self.call("preset_format")
+        self.assertEqual(sorted(e["key"] for e in format_["builtin_prompts"] if e["reader"] == "helper"),
+                         ["direct_scene", "judge_quests", "record_changes", "resolve_actions", "suggest_choices", "summarize"])
+        self.assertIn("prompts", format_["schema"]["properties"])
+        self.assertEqual(self.call("list_presets")[1]["presets"], [])
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            mine = dict(json.load(f), name="Terse", prompts={"summarize": "Summarize in fifty words."})
+        failed, saved = self.call("save_preset", preset="terse", content=mine)
+        self.assertEqual((failed, saved["usable"], saved["problems"]), (False, True, []))
+        self.assertEqual(self.call("get_preset", preset="terse")[1]["content"]["prompts"], {"summarize": "Summarize in fifty words."})
+        self.assertEqual([(p["id"], p["name"], p["problems"]) for p in self.call("list_presets")[1]["presets"]], [("terse", "Terse", 0)])
+        failed, saved = self.call("save_preset", preset="terse", content=dict(mine, prompts={"sing": "la"}))
+        self.assertEqual((failed, saved["usable"]), (False, False))
+        self.assertIn("unknown entry 'sing'", saved["problems"][0])
+        for tool, args in [("save_preset", {"preset": "default", "content": mine}), ("save_preset", {"preset": "../x", "content": mine}), ("get_preset", {"preset": "nope"}),
+                           ("trash_preset", {"preset": "default"})]:
+            self.assertTrue(self.call(tool, **args)[0], (tool, args))
+        self.assertFalse(self.call("trash_preset", preset="terse")[0])
+        self.assertEqual(self.call("list_presets")[1]["presets"], [])
         self.assertIn("error", self.send("tools/call", {"name": "format_disk", "arguments": {}}))
         self.assertEqual(self.send("resources/list")["error"]["code"], -32601)
 

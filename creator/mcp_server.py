@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 sys.path.insert(0, HERE)
 
 from aigame.card import CardError, check_card  # noqa: E402
+from aigame.wording import BUILTIN_PROMPTS, check_preset  # noqa: E402
 import freshness  # noqa: E402
 import sillytavern  # noqa: E402
 from server import IMAGE_TYPES, Refused, Workspace  # noqa: E402
@@ -27,6 +28,7 @@ from templates import new_card  # noqa: E402
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SCHEMA = os.path.join(ROOT, "spec", "card.schema.json")
+PRESET_SCHEMA = os.path.join(ROOT, "spec", "preset.schema.json")
 MAX_IMAGE = 50 * 1024 * 1024
 
 INSTRUCTIONS = """\
@@ -34,7 +36,8 @@ Tools for SI-Station cards: self-contained story games played in the SI-Station 
 Call card_format once before writing card content; it returns the format every card must follow.
 Change a card with edit_card, which takes small edits addressed by path; read only the part you need with get_card's path.
 Every tool that changes a card returns "problems": the game's own checks, in plain words. A card is playable only when that list is empty, so fix what it lists before you finish.
-Ids are lowercase letters, digits and underscores. Other parts of a card refer to things by id, so renaming an id means updating every reference to it."""
+Ids are lowercase letters, digits and underscores. Other parts of a card refer to things by id, so renaming an id means updating every reference to it.
+Presets are separate from cards: a preset is the set of instructions the story model and the helper models are given, for any card. Call preset_format before writing one; save_preset returns its problems the same way."""
 
 
 class ToolError(Exception):
@@ -236,7 +239,49 @@ class Tools(object):
         return {"moved_to": os.path.join(self.ws.cards, ".trash"), "note": "The card was moved, not deleted. Move its folder back to undo."}
 
 
+    def preset_format(self, args):
+        with open(PRESET_SCHEMA, "rb") as f:
+            schema = json.loads(f.read().decode("utf-8"))
+        return {
+            "schema": schema,
+            "builtin_prompts": BUILTIN_PROMPTS,
+            "notes": [
+                "blocks are the instructions given to the story model, in order. kind \"text\" is written by the author; kind \"slot\" is filled by the game.",
+                "prompts replaces the game's own wording, one entry per name in builtin_prompts. Include only the ones you are changing; each entry there shows the default text and the {{parts}} the game fills in.",
+                "A helper prompt must keep the reply format of its default (the JSON shape), because the game reads the reply by it.",
+                "The preset named \"default\" is the game's own and cannot be changed. Save under a new id to make a copy.",
+            ],
+        }
+
+    def list_presets(self, args):
+        return {"presets": self.ws.list_presets(), "folder": self.ws.presets}
+
+    def get_preset(self, args):
+        preset = self.ws.read_preset(args.get("preset"))
+        return {"preset": args["preset"], "problems": check_preset(preset), "content": preset}
+
+    def save_preset(self, args):
+        preset_id, content = args.get("preset"), args.get("content")
+        if not isinstance(content, dict):
+            raise ToolError('"content" must be the whole preset as an object.')
+        path = self.ws.preset_path(preset_id, must_exist=False)
+        if preset_id != "default" and not os.path.isfile(path):
+            if not os.path.isdir(self.ws.presets):
+                os.makedirs(self.ws.presets)
+            with open(path, "wb") as f:
+                f.write(b"{}")
+        problems = self.ws.write_preset(preset_id, content)
+        return {"preset": preset_id, "usable": not problems, "problems": problems,
+                "note": "The game lists it on its Preset screen once it has no problems."}
+
+    def trash_preset(self, args):
+        self.ws.trash_preset(args.get("preset"))
+        return {"moved_to": os.path.join(self.ws.presets, ".trash"), "note": "The preset was moved, not deleted."}
+
+
 _CARD = {"type": "string", "description": "The card's folder name, as given by list_cards."}
+
+_PRESET = {"type": "string", "description": "The preset's id: its file name without .preset.json, as given by list_presets. Lowercase letters, digits and underscores."}
 
 TOOLS = [
     {"name": "card_format", "description": "Returns the format every SI-Station card must follow (a JSON Schema plus notes). Call this once before writing or changing card content.",
@@ -274,6 +319,17 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["card"], "additionalProperties": False, "properties": {"card": _CARD}}},
     {"name": "trash_card", "description": "Moves a card to the trash folder. Only do this when the person has clearly asked for the card to be removed.",
      "inputSchema": {"type": "object", "required": ["card"], "additionalProperties": False, "properties": {"card": _CARD}}},
+    {"name": "preset_format", "description": "Returns the format of a preset (a JSON Schema), plus every built-in prompt of the game with its default wording. Call this once before writing or changing a preset.",
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "list_presets", "description": "Lists the presets the game can use, with how many problems each has.",
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "get_preset", "description": "Reads a preset and its problems.",
+     "inputSchema": {"type": "object", "required": ["preset"], "additionalProperties": False, "properties": {"preset": _PRESET}}},
+    {"name": "save_preset", "description": "Saves a whole preset under an id, creating it if it does not exist, and returns the game's checks on it. To change an existing one, read it with get_preset, change what is needed and save it back.",
+     "inputSchema": {"type": "object", "required": ["preset", "content"], "additionalProperties": False,
+                     "properties": {"preset": _PRESET, "content": {"type": "object", "description": "The whole preset."}}}},
+    {"name": "trash_preset", "description": "Moves a preset to the trash folder. Only do this when the person has clearly asked for it to be removed.",
+     "inputSchema": {"type": "object", "required": ["preset"], "additionalProperties": False, "properties": {"preset": _PRESET}}},
 ]
 
 
@@ -334,9 +390,10 @@ def main():
     parser = argparse.ArgumentParser(description="MCP server for editing SI-Station cards")
     parser.add_argument("--cards", default=os.path.join(ROOT, "cards"))
     parser.add_argument("--exports", default=os.path.join(ROOT, "exports"))
+    parser.add_argument("--presets", default=None, help="folder of preset files; by default the presets folder next to the cards folder")
     parser.add_argument("--watch", action="append", default=[], help=argparse.SUPPRESS)   # extra files whose change restarts the server; for tests
     args = parser.parse_args()
-    tools = Tools(Workspace(os.path.abspath(args.cards), os.path.abspath(args.exports)))
+    tools = Tools(Workspace(os.path.abspath(args.cards), os.path.abspath(args.exports), args.presets and os.path.abspath(args.presets)))
     loaded = freshness.stamp(args.watch)
     CODE_ID = "%x" % (hash(loaded) & 0xffffffff)
 

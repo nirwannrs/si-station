@@ -284,7 +284,7 @@ screen hud(start="inventory"):
                                 if ways:
                                     text esc("Leads to: " + ", ".join(ways)) size 24 color "#aaaaaa"
                                 if here and place["id"] == here["id"]:
-                                    $ people = [a["name"] if a.get("known", True) else "someone you do not know" for w, a in sorted(game_state["actors"].items()) if w != "player" and a["location"] == here["id"] and not aig_state.is_away(card, a)]
+                                    $ people = [a["name"] for w, a in sorted(game_state["actors"].items()) if w != "player" and a.get("known", True) and a["location"] == here["id"] and not aig_state.is_away(card, a)]
                                     if people:
                                         text esc("Here: " + ", ".join(people)) size 24 color "#aaaaaa"
                             if not aig_state.place_list(card, game_state):

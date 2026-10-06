@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 
 from aigame import llm, prompt  # noqa: E402
 from aigame.actions import apply_actions  # noqa: E402
-from aigame.card import load_card  # noqa: E402
+from aigame.card import Card, load_card  # noqa: E402
 from aigame.state import new_game, track  # noqa: E402
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -123,8 +123,9 @@ class PromptTest(unittest.TestCase):
         self.assertIn("Write in second person", system)            # enabled toggle
         self.assertNotIn("one or two short paragraphs", system)    # disabled toggle
         self.assertIn("Low fantasy", system)
-        self.assertIn("Mira Oakhand: Innkeeper", system)           # the whole cast, the same every turn
-        self.assertIn("Tobin: Stable boy", system)
+        self.assertIn("Mira Oakhand: Innkeeper", system)           # she is in the room when the game starts
+        self.assertIn("Tobin: Stable boy", system)                 # the first objective names him
+        self.assertIn("Marsh Bandit: A lean cutthroat", system)    # the card's own direction names him, so the model must know who he is
         self.assertIn("<actions>", system)                         # the mechanics text is long and never changes
         self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user", "assistant", "user"])
         self.assertEqual([bool(m.get("cache")) for m in messages], [False, False, False, True, False])
@@ -415,8 +416,10 @@ class CachingTest(unittest.TestCase):
         return llm.chat_request({"provider": provider, "api_key": "k", "base_url": "http://x/v1"}, model, system, messages, self.preset["sampling"])["json"]
 
     def finish_turn(self, text, narration, actions=()):
+        entering = prompt.arrivals(self.card, self.state, text)        # as the game does: whoever enters with this turn is kept with it
         results = apply_actions(self.card, self.state, list(actions))
-        self.state["history"].append({"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "narration": narration})
+        self.state["history"].append({"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "narration": narration, "cast": entering})
+        self.state["cast"] += entering
         self.state["turn"] += 1
 
     def cached_prefix(self, body):
@@ -562,11 +565,11 @@ class TrackerTest(unittest.TestCase):
         state = new_game(card)
         known = lambda: sorted(w for w, a in state["actors"].items() if a["known"] and w != "player")
         self.assertEqual(known(), [])
-        self.assertIn("Mira Oakhand (mira) [the player has not met them yet]", prompt.describe_state(card, state))
+        self.assertIn("Mira Oakhand (mira) [not met yet]", prompt.describe_state(card, state))
         meet(state, ["mira", "nobody"])                                                           # she speaks in a scene
         self.track(card, state, [{"id": "tobin", "location": "here"}, {"id": "marsh_bandit", "note": "watching from the road"}])
         self.assertEqual(known(), ["mira", "tobin"])                                              # the bandit was only mentioned at a distance
-        self.assertNotIn("Mira Oakhand (mira) [the player has not met them yet]", prompt.describe_state(card, state))
+        self.assertNotIn("Mira Oakhand (mira) [not met yet]", prompt.describe_state(card, state))
         self.assertTrue(all(a["known"] for a in new_game(self.card)["actors"].values()))          # the default is that everyone is known
 
     def test_old_saves_gain_the_note(self):
@@ -725,7 +728,8 @@ class QuestJudgeTest(unittest.TestCase):
         self.state["scene"] = prompt.parse_scene('{"scene": "Tobin is  hiding a letter\\nfrom Traveler."}')
         brief = prompt.describe_scene(self.card, self.state)
         self.assertIn("Place: Stable.\nWith Traveler: Tobin (hiding a letter).", brief)
-        self.assertIn("Not here: Marsh Bandit, not in the story yet; Mira Oakhand, at Common Room (behind the bar).", brief)
+        self.assertNotIn("Mira", brief)                                           # who is somewhere else is not named: a model uses whoever it is shown
+        self.assertNotIn("Bandit", brief)
         self.assertIn("What is going on: Tobin is hiding a letter from Traveler.", brief)
         with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
             preset = json.load(f)
@@ -735,6 +739,84 @@ class QuestJudgeTest(unittest.TestCase):
         apply_actions(self.card, self.state, [{"type": "move", "location": "common_room"}], by_player=True)
         self.assertNotIn("What is going on", prompt.describe_scene(self.card, self.state))   # a new place, a new scene
         self.assertEqual(prompt.parse_scene("not json"), "")
+
+    def test_only_who_has_entered_the_story_is_described(self):
+        card = self.card
+        self.assertEqual(self.state["cast"], ["mira", "tobin", "marsh_bandit"])   # Mira is in the room; the first objective names Tobin, the scenario the bandit
+        del card.quests["missing_courier"]["stages"][0]["done_when"]              # a card whose own direction does not name Tobin
+        state = new_game(card)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            preset = json.load(f)
+        self.assertEqual(state["cast"], ["mira", "marsh_bandit"])
+        system, messages = prompt.narrator_prompt(card, state, preset, "I look around.", [], record=False)
+        everything = system + "\n".join(m["content"] for m in messages)
+        for unseen in ("Tobin", "Stable boy", "sealed_letter"):
+            self.assertNotIn(unseen, everything)
+        self.assertNotIn("All items that exist", everything)                      # with a bookkeeper, the story model needs no item ids
+        self.assertIn("All items that exist", prompt.bookkeeper_prompt(card, state, "I wait.", [], "Rain.")[1][0]["content"])
+
+        # Naming someone brings them in, in that turn's message, and the message stays as it was sent.
+        self.assertEqual(prompt.arrivals(card, state, "I ask Mira where Tobin is."), ["tobin"])
+        self.assertEqual(prompt.arrivals(card, state, "I walk through the marsh, thinking of a bandit."), [])   # a word is not a name
+        system_2, messages_2 = prompt.narrator_prompt(card, state, preset, "I ask Mira where Tobin is.", [], record=False)
+        self.assertEqual(system_2, system)                                        # the cached start of the prompt did not move
+        self.assertIn("[Entering the story]\nTobin: Stable boy", messages_2[-1]["content"])
+        self.assertIn("Elsewhere: Tobin (tobin) at Stable (stable)", messages_2[-1]["content"])     # now that he is in the story, where he is matters
+        state["history"].append({"player": "I ask Mira where Tobin is.", "results": [], "narration": "\"Stable,\" she says.", "cast": ["tobin"]})
+        state["cast"].append("tobin")
+        system_3, messages_3 = prompt.narrator_prompt(card, state, preset, "I nod.", [], record=False)
+        self.assertEqual(system_3, system)
+        self.assertTrue(messages_3[2]["content"].startswith("[Entering the story]\nTobin: Stable boy"))
+        self.assertNotIn("[Entering the story]", messages_3[-1]["content"])
+        state["summarized"] = 1                                                   # that turn is folded into the summary: he joins the rest
+        self.assertIn("Tobin: Stable boy", prompt.narrator_prompt(card, state, preset, "I nod.", [], record=False)[0])
+
+    def test_someone_in_the_scene_but_not_in_the_exchange_gets_one_line(self):
+        card, state = self.card, self.state
+        apply_actions(card, state, [{"type": "move", "who": "tobin", "location": "common_room"}])
+        both = prompt.describe_state(card, state)                                 # asked for everything
+        self.assertEqual(both.count("Inventory:"), 3)
+        about_mira = prompt.describe_state(card, state, focus="I ask Mira for stew.")
+        self.assertIn("- Mira Oakhand (mira): Level 1", about_mira)
+        self.assertIn("- Tobin (tobin): Health 10/20; Trust toward the player: 40/100", about_mira)
+        self.assertEqual(about_mira.count("Inventory:"), 2)                       # the player's and Mira's
+
+    def test_a_quest_is_only_offered_where_it_can_begin(self):
+        from aigame.state import available_quests
+        card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        card.data["quests"] += [{"id": "rats", "title": "Rats", "description": "Clear the cellar.", "giver": "mira", "stages": [{"id": "a", "description": "Kill rats."}]},
+                                {"id": "foal", "title": "The Foal", "description": "Help Tobin.", "start_location": "stable", "stages": [{"id": "a", "description": "Help."}]},
+                                {"id": "reward", "title": "A Favour Owed", "description": "Mira owes you.", "after": "missing_courier", "stages": [{"id": "a", "description": "Collect."}]}]
+        card = Card(card.data, card.path)
+        state = new_game(card)
+        self.assertEqual([q["id"] for q in available_quests(card, state)], ["rats"])          # Mira is here; the stable is not; the courier is not found
+        self.assertIn("[Quests that can begin now]\n- Rats (rats)", prompt.describe_quests(card, state))
+        self.assertNotIn("Foal", prompt.describe_quests(card, state) + prompt.judge_prompt(card, state, "hi", "Rain.")[1][0]["content"])
+        apply_actions(card, state, [{"type": "move", "location": "stable"}], by_player=True)
+        self.assertEqual([q["id"] for q in available_quests(card, state)], ["foal"])
+        from aigame.card import check_card
+        bad = json.loads(json.dumps(card.data))
+        bad["quests"][1].update(giver="nobody", start_location="moon", after="rats")
+        bad["quests"][3].update(after="nothing", auto_start=True)
+        problems = "\n".join(check_card(bad))
+        for expected in ("given by unknown character 'nobody'", "starts at unknown location 'moon'", "comes after unknown quest 'rats'", "comes after unknown quest 'nothing'", "cannot both be active"):
+            self.assertIn(expected, problems)
+        early = apply_actions(card, state, [{"type": "quest_start", "quest": "reward"}])[0]
+        self.assertEqual((early["ok"], early["message"]), (False, "Quest A Favour Owed cannot begin until The Missing Courier is finished."))
+        state["quests"]["missing_courier"]["status"] = "done"
+        self.assertEqual([q["id"] for q in available_quests(card, state)], ["foal", "reward"])
+
+    def test_a_save_from_before_the_cast_was_tracked(self):
+        from aigame.state import reconcile
+        old = dict(self.state, history=[{"player": "I find Tobin.", "results": [], "narration": "He is in the stable."}])
+        del old["cast"]
+        reconcile(self.card, old)
+        self.assertEqual(old["cast"], ["mira", "tobin", "marsh_bandit"])
+        del self.card.quests["missing_courier"]["stages"][0]["done_when"]
+        older = dict(new_game(self.card), history=[{"player": "I find Tobin.", "results": [], "narration": "He is in the stable."}])
+        del older["cast"]
+        reconcile(self.card, older)
+        self.assertEqual(older["cast"], ["mira", "marsh_bandit", "tobin"])        # named in the story so far, so he has entered it
 
     def test_the_judge_is_told_which_objectives_are_the_games(self):
         self.quest["stage"] = 1

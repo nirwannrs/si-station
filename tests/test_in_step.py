@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 sys.path.insert(0, os.path.join(ROOT, "creator"))
 
 import mcp_server  # noqa: E402
-from aigame import actions, card, prompt  # noqa: E402
+from aigame import actions, card, prompt, wording  # noqa: E402
 from templates import RULES  # noqa: E402
 
 
@@ -80,6 +80,8 @@ class InStepTest(unittest.TestCase):
             "asset": "add_image",
             "pack": "pack_card",
             "file": None,                                # only serves pictures to the editor page
+            "presets": "save_preset",                    # also list_presets, get_preset, trash_preset; preset_format is the builder's reference
+            "preview": None,                             # only shows the preset builder what a prompt looks like when sent
             "exports": "pack_card",                      # the download link; pack_card returns the file's path instead
         }
         source = read("creator", "server.py")
@@ -94,6 +96,111 @@ class InStepTest(unittest.TestCase):
         for tool in tools:
             self.assertTrue(callable(getattr(mcp_server.Tools, tool, None)), tool)
         self.assertEqual(mcp_server.Tools(None).card_format({})["schema"], CARD_SCHEMA)      # served from the file, never a copy
+
+
+class EditablePromptsTest(unittest.TestCase):
+    """Every instruction the game writes for a model can be reworded from a preset, in the game
+    and in the creator. A helper job added without registering its prompt fails here."""
+
+    def setUp(self):
+        from aigame.card import load_card
+        from aigame.state import new_game
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        self.preset = json.loads(read("presets", "default.preset.json"))
+
+    def systems(self, prompts):
+        c, s = self.card, self.state
+        built = {
+            "resolve_actions": prompt.resolver_prompt(c, s, "I wait.", prompts=prompts),
+            "suggest_choices": prompt.suggest_prompt(c, s, 3, prompts=prompts),
+            "summarize": prompt.summary_prompt(c, s, [], prompts=prompts),
+            "direct_scene": prompt.director_prompt(c, s, ["Rain."], prompts=prompts),
+            "record_changes": prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", prompts=prompts),
+            "judge_quests": prompt.judge_prompt(c, s, "I wait.", "Rain.", prompts=prompts),
+        }
+        return dict((task, system) for task, (system, messages) in built.items())
+
+    def test_every_helper_job_has_a_prompt_that_can_be_reworded(self):
+        tasks = [name for name, label in prompt.HELPER_TASKS]
+        registered = [entry["key"] for entry in wording.BUILTIN_PROMPTS]
+        self.assertEqual(set(tasks) - set(registered), set(), "helper jobs whose prompt is not in wording.py")
+        self.assertEqual(sorted(self.systems(None)), sorted(tasks), "a helper job is missing from this test")
+        reworded = self.systems(dict((task, "REWORDED " + task) for task in tasks))
+        for task in tasks:
+            self.assertTrue(reworded[task].startswith("REWORDED " + task), task + " ignores the preset's wording")
+
+    def test_the_story_models_rules_can_be_reworded_too(self):
+        for record, keys in ((True, ("narrator_mechanics", "narrator_records", "leaving_records")), (False, ("narrator_mechanics", "narrator_prose", "leaving_prose"))):
+            preset = dict(self.preset, prompts=dict((key, "REWORDED " + key) for key in keys))
+            system = prompt.narrator_prompt(self.card, self.state, preset, "I wait.", [], record=record)[0]
+            for key in keys:
+                self.assertIn("REWORDED " + key, system)
+        story = [entry["key"] for entry in wording.BUILTIN_PROMPTS if entry["reader"] == "story"]
+        self.assertEqual(sorted(story), ["leaving_prose", "leaving_records", "narrator_mechanics", "narrator_prose", "narrator_records"])
+
+    def test_the_editors_show_each_prompt_the_way_it_is_really_sent(self):
+        """Beside each helper prompt the editors list the sections sent under it. That list is
+        written by hand in wording.py, so it is checked here against what the builders send."""
+        c, s = self.card, self.state
+        c.locations["cellar"]["hidden"] = True
+        s = __import__("aigame.state", fromlist=["new_game"]).new_game(c)
+        s["history"].append({"player": "hi", "results": [], "narration": "Rain."})
+        results = [{"ok": True, "message": "Traveler buys stew."}]
+        sent = {
+            "resolve_actions": [prompt.resolver_prompt(c, s, "I wait.")],
+            "suggest_choices": [prompt.suggest_prompt(c, s, 3)],
+            "summarize": [prompt.summary_prompt(c, s, s["history"])],
+            "direct_scene": [prompt.director_prompt(c, s, ["Rain."])],
+            "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False)],
+            "judge_quests": [prompt.judge_prompt(c, s, "I wait.", "Rain.")],
+        }
+        self.assertEqual(sorted(sent), sorted(name for name, label in prompt.HELPER_TASKS))
+        for task, builds in sent.items():
+            listed = [section["heading"] for section in wording.builtin_prompt(task)["sends"]]
+            seen = set()
+            for system, messages in builds:
+                self.assertEqual([m["role"] for m in messages], ["user"], task)        # one message under the instruction, as the editors say
+                found = re.findall(r"^\[[^\]\n]+\]$", messages[0]["content"], re.M)
+                self.assertEqual(found, [h for h in listed if h in found], task + " sends its sections in another order, or one the editors do not list")
+                seen |= set(found)
+            self.assertEqual(set(listed) - seen, set(), task + ": the editors list a section that is never sent")
+        page = read("creator", "static", "app.js")
+        card_pages = set(re.findall(r'^  \{ id: "(\w+)", title:', page, re.M))
+        for entry in wording.BUILTIN_PROMPTS:
+            self.assertTrue(entry["where"], entry["key"])
+            self.assertEqual(set(entry["part_sources"]), set(entry["parts"]), entry["key"])
+            for told in entry["sends"] + list(entry["part_sources"].values()):
+                self.assertTrue(told["source"], entry["key"])
+                kind, _, target = (told["link"] or "none:").partition(":")
+                self.assertIn(kind, ("none", "card", "preset"), told["link"])
+                if kind != "none":
+                    self.assertIn(target.split("/")[0], card_pages, "%s points at a page the creator does not have: %s" % (entry["key"], told["link"]))
+                if "/" in target:
+                    self.assertIn(target.split("/")[1], [e["key"] for e in wording.BUILTIN_PROMPTS])
+
+    def test_a_part_the_game_fills_in_cannot_be_lost_by_an_edit(self):
+        kept = self.systems({"record_changes": "Record changes. {{actions}}"})["record_changes"]
+        self.assertIn('"type": "change_stat"', kept)
+        self.assertIn("- Costs and harm.", kept)                   # {{checks}} was left out of the edit, so it is added at the end
+        self.assertNotIn("{{", kept.replace("{{user}}", ""))
+        self.assertEqual(self.systems({"summarize": "   "}), self.systems(None))       # an emptied prompt falls back to the game's own
+
+    def test_preset_files_and_format_agree_with_the_engine(self):
+        schema = json.loads(read("spec", "preset.schema.json"))
+        self.assertEqual(tuple(schema["properties"]["blocks"]["items"]["properties"]["slot"]["enum"]), wording.SLOTS)
+        for entry in wording.BUILTIN_PROMPTS:
+            self.assertIn(entry["key"], schema["properties"]["prompts"]["description"])
+            for part in entry["parts"]:
+                self.assertIn("{{%s}}" % part, entry["text"], entry["key"])
+        for name in sorted(os.listdir(os.path.join(ROOT, "presets"))):
+            if name.endswith(".preset.json"):
+                self.assertEqual(wording.check_preset(json.loads(read("presets", name))), [], name)
+        broken = {"spec": "aigame-preset", "name": "", "blocks": [{"id": "a", "kind": "slot", "slot": "weather"}, {"id": "a", "kind": "text"}],
+                  "prompts": {"sing": "la"}, "sampling": {"temperature": "hot"}}
+        problems = "\n".join(wording.check_preset(broken))
+        for expected in ("needs a name", "unknown built-in part 'weather'", "two blocks share the id a", "needs its text", "Recent turns", "unknown entry 'sing'", "sampling.temperature must be a number"):
+            self.assertIn(expected, problems)
 
 
 class ButtonFunctionsTest(unittest.TestCase):

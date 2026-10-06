@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(ROOT, "creator"))
 import server  # noqa: E402
 import sillytavern  # noqa: E402
 from aigame.card import check_card, load_card  # noqa: E402
+from aigame import wording  # noqa: E402
 from templates import new_card  # noqa: E402
 
 
@@ -110,6 +111,7 @@ class ServerTest(unittest.TestCase):
         self.work = tempfile.mkdtemp()
         cards = os.path.join(self.work, "cards")
         shutil.copytree(os.path.join(ROOT, "cards", "rusty_lantern"), os.path.join(cards, "rusty_lantern"))
+        os.makedirs(os.path.join(self.work, "presets"))
         server.Handler.workspace = server.Workspace(cards, os.path.join(self.work, "exports"))
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -159,6 +161,69 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.call("DELETE", "/api/projects/sky_pirates")[0], 200)
         self.assertEqual(self.call("GET", "/api/projects/sky_pirates")[0], 404)
         self.assertEqual(len(os.listdir(os.path.join(self.work, "cards", ".trash"))), 1)           # moved, not deleted
+
+    def test_presets_are_made_edited_and_trashed(self):
+        shutil.copy(os.path.join(ROOT, "presets", "default.preset.json"), os.path.join(self.work, "presets", "default.preset.json"))
+        status, listing = self.call("GET", "/api/presets")
+        self.assertEqual([(p["id"], p["builtin"], p["problems"]) for p in listing["presets"]], [("default", True, 0)])
+        self.assertEqual(len(listing["wording"]), 11)                             # every prompt the game writes itself, for the builder to show
+        self.assertEqual(sorted(listing["slots"]), sorted(wording.SLOTS))
+        self.assertEqual(self.call("PUT", "/api/presets/default", {"name": "Mine"})[0], 403)      # the game's own is never changed
+
+        status, made = self.call("POST", "/api/presets", {"name": "For small models"})
+        self.assertEqual((status, made["id"]), (200, "for_small_models"))
+        status, opened = self.call("GET", "/api/presets/for_small_models")
+        self.assertEqual((opened["preset"]["name"], opened["problems"], opened["builtin"]), ("For small models", [], False))
+        opened["preset"]["prompts"] = {"judge_quests": "Be strict. Reply with JSON."}
+        opened["preset"]["blocks"][1]["enabled"] = False
+        self.assertEqual(self.call("PUT", "/api/presets/for_small_models", opened["preset"]), (200, {"problems": []}))
+        with open(os.path.join(self.work, "presets", "for_small_models.preset.json")) as f:
+            self.assertEqual(json.load(f)["prompts"], {"judge_quests": "Be strict. Reply with JSON."})
+        status, copy_ = self.call("POST", "/api/presets", {"name": "For small models", "copy_of": "for_small_models"})
+        self.assertEqual(copy_["id"], "for_small_models_2")
+        self.assertEqual(self.call("GET", "/api/presets/for_small_models_2")[1]["preset"]["prompts"], {"judge_quests": "Be strict. Reply with JSON."})
+        status, bad = self.call("PUT", "/api/presets/for_small_models_2", {"spec": "aigame-preset", "name": "x", "blocks": []})
+        self.assertIn("at least one block", bad["problems"][0])
+
+        # What a prompt looks like when it goes out, with edits that have not been saved yet.
+        draft = dict(opened["preset"], prompts={"judge_quests": "Be VERY strict. Reply with JSON."})
+        status, shown = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "key": "judge_quests"})
+        self.assertEqual((status, shown["system"]), (200, "Be VERY strict. Reply with JSON."))
+        self.assertEqual([m["role"] for m in shown["messages"]], ["user"])
+        status, books = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "key": "record_changes"})
+        self.assertEqual(sorted(books["parts"]), ["actions", "checks", "states"])            # what the game puts in place of each {{part}}
+        self.assertTrue(books["parts"]["actions"].startswith('{"type": "add_item"'))
+        self.assertTrue(books["parts"]["checks"].startswith("- Costs and harm."))
+        self.assertIn(books["parts"]["states"], books["system"])
+        self.assertIn("[Quests in progress]\n- The Missing Courier", shown["messages"][0]["content"])
+        status, shown = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "key": "narrator_prose"})
+        self.assertIn("A bookkeeper reads what you write", shown["system"])
+        self.assertIn("[The scene right now]", shown["messages"][-1]["content"])
+        # One whole turn, as the request body that goes to the story model.
+        draft["blocks"][0]["content"] = "You are the narrator. UNSAVED EDIT."
+        status, turn = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "turn": True, "provider": "nanogpt"})
+        self.assertEqual((status, turn["url"]), (200, "https://nano-gpt.com/api/v1/chat/completions"))
+        sent = turn["request"]
+        self.assertEqual([m["role"] for m in sent["messages"]], ["system", "user", "assistant", "user", "assistant", "user", "assistant", "user"])
+        self.assertTrue(sent["messages"][0]["content"].startswith("You are the narrator. UNSAVED EDIT."))
+        self.assertIn("A bookkeeper reads what you write", sent["messages"][0]["content"])       # the bookkeeper is on unless said otherwise
+        self.assertIn("[The scene right now]", sent["messages"][-1]["content"])
+        self.assertEqual((sent["temperature"], sent["max_tokens"]), (0.9, 2000))
+        claude = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "turn": True, "provider": "anthropic", "bookkeeper": False})[1]
+        self.assertEqual(claude["url"], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(claude["request"]["system"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})   # where the cached part ends
+        self.assertIn("<actions>", claude["request"]["system"][0]["text"])
+        self.assertNotIn("your key", json.dumps(turn) + json.dumps(claude))
+        self.assertEqual(self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "turn": True, "provider": "carrier pigeon"})[0], 400)
+        for body in ({"preset": draft, "card": "rusty_lantern", "key": "sing"}, {"preset": draft, "card": "nope", "key": "summarize"}):
+            self.assertEqual(self.call("POST", "/api/preview", body)[0], 404)
+        self.assertEqual(self.call("POST", "/api/preview", {"preset": {"blocks": []}, "card": "rusty_lantern", "key": "summarize"})[0], 409)
+
+        self.assertEqual(self.call("DELETE", "/api/presets/default")[0], 403)
+        self.assertEqual(self.call("DELETE", "/api/presets/for_small_models_2")[0], 200)
+        self.assertEqual([p["id"] for p in self.call("GET", "/api/presets")[1]["presets"]], ["default", "for_small_models"])
+        for path in ("/api/presets/nope", "/api/presets/..%2Fx"):
+            self.assertEqual(self.call("GET", path)[0], 404)
 
     def test_import_and_static_files(self):
         blob = png_with_text(b"chara", base64.b64encode(json.dumps(TAVERN).encode()))

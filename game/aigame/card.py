@@ -461,6 +461,14 @@ def check_card(data):
                     p.append("%s: a relationship condition must name a character" % where)
                 if kind in ("level", "relationship") and (not isinstance(c.get("at_least"), (int, float)) or isinstance(c.get("at_least"), bool)):
                     p.append("%s: a %s condition needs a number in at_least" % (where, kind))
+        if q.get("giver") is not None and q["giver"] not in char_ids:
+            p.append("quest %s is given by unknown character %r" % (q["id"], q["giver"]))
+        if q.get("start_location") is not None and q["start_location"] not in loc_ids:
+            p.append("quest %s starts at unknown location %r" % (q["id"], q["start_location"]))
+        if q.get("after") is not None and (q["after"] == q["id"] or q["after"] not in set(x["id"] for x in quests)):
+            p.append("quest %s comes after unknown quest %r" % (q["id"], q["after"]))
+        if q.get("after") is not None and q.get("auto_start"):
+            p.append("quest %s cannot both be active from the start and come after another quest" % q["id"])
         rewards = q.get("rewards", {})
         check_stacks(rewards.get("items"), "quest %s rewards" % q["id"])
         for stat in rewards.get("stats", {}):

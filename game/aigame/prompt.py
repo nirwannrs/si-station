@@ -11,7 +11,8 @@ from .actions import shop_price
 from .card import PLAYER
 from .llm import extract_json
 from .text import keep_marks_paired
-from .state import describe_states, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
+from .wording import prompt_text
+from .state import available_quests, cast_in_play, named_in, describe_states, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -91,13 +92,7 @@ def player_action_types(card):
     return set(kind for kind, need, line in PLAYER_ACTIONS if uses(card, need))
 
 
-LEAVING = """
-
-[When {{user}} leaves a place]
-A result saying {{user}} left one place for another means they walked out of the scene that was going on. Do not carry that scene on as if they were still in it. Decide what leaving means and narrate that:
-- If someone there would have stopped them (a guard, a captor, an examiner who has not dismissed them), narrate them being stopped and put them back with a move action for "player" to the place they left. If they would be stopped every time, also use lock_travel so they cannot simply walk off again.
-- Otherwise they are gone, and the place they left goes on without them. Narrate where they are now. Let what they walked out on have its consequences: people they left react when next met, and a quest that needed them there fails (quest_fail) if its "Fails if" says so or if leaving plainly makes it impossible.
-You can also use lock_travel ahead of time, the moment a scene begins that {{user}} could not walk out of. While travel is locked the game state says so. It stays locked until you use unlock_travel, so do that as soon as the story lets them go: when the scene ends, they are dismissed, they escape or talk their way out. Never leave it locked once nothing is holding them."""
+# (The wording for leaving a place is among the built-in prompts in wording.py.)
 
 
 def states_reference(card, record=True):
@@ -118,7 +113,7 @@ Each character's current states are in the game state. %s A character who is out
 """ % duty + "\n".join(lines)
 
 
-def action_protocol(card, record=True):
+def action_protocol(card, record=True, prompts=None):
     """The narrator's game-mechanics instructions. Empty for a card that tracks nothing.
 
     record says who keeps the books. True: the narrator reports changes itself, in an <actions>
@@ -129,42 +124,20 @@ def action_protocol(card, record=True):
     if not lines:
         return ""
     tracked = ", ".join(label for need, label in TRACKED if uses(card, need))
-    opening = """\
-[Game mechanics]
-A game engine tracks %s. It is the source of truth; the state shown to you is exact.
-
-The player's message may come with engine results for things they tried to do. Treat them as fact:
-- "done" happened. Narrate it.
-- "REJECTED" did not happen. Narrate the attempt failing for the stated reason, in the story's voice (reaching for a pouch that is empty, a door that will not open). Never narrate a rejected action as succeeding.
-- "UP TO YOU" is something the engine left to the story, such as setting off for a place that is not next door. Decide what happens and narrate it: they may arrive by whatever means the story offers, be delayed on the way, or be unable to go.
-Never describe {{user}} gaining, losing or using something the engine tracks unless a result or the state says so.
-""" % tracked
+    opening = prompt_text(prompts, "narrator_mechanics", tracked=tracked)
     if record:
-        return opening + """
-When events you narrate change the tracked state, end your reply with one block:
-<actions>{"actions": [ ... ]}</actions>
-Use only these, with ids from the state. WHO is "player" or a character id.
-%s
-Do not repeat anything already listed in the engine results. Leave the block out when nothing changes. The player never sees it.%s%s""" % (
-            "\n".join(lines), LEAVING if uses(card, "map") else "", states_reference(card))
-    return opening + """
-You do not record changes yourself. A bookkeeper reads what you write and updates the game from it, so write so that what happened cannot be mistaken:
-- Say outright who gives what to whom, what is used up or spent, who is hurt and roughly how badly, who arrives and who leaves, and where {{user}} ends up.
-- When something that has been going on stops, say so in the story: {{user}} lands and is no longer flying, the ropes are cut, the sleeper wakes. The state shown to you stays as it is until your text ends it.
-- Keep to the state: {{user}} cannot spend what they do not have or be somewhere the state does not put them.
-Write only the story. No lists of changes, no notes to the bookkeeper.%s%s""" % (
-        LEAVING_PROSE if uses(card, "map") else "", states_reference(card, record=False))
+        return opening + "\n" + prompt_text(prompts, "narrator_records", actions="\n".join(lines)) + (
+            "\n\n" + prompt_text(prompts, "leaving_records") if uses(card, "map") else "") + states_reference(card)
+    return opening + "\n" + prompt_text(prompts, "narrator_prose") + (
+        "\n\n" + prompt_text(prompts, "leaving_prose") if uses(card, "map") else "") + states_reference(card, record=False)
 
 
-LEAVING_PROSE = """
 
-[When {{user}} leaves a place]
-A result saying {{user}} left one place for another means they walked out of the scene that was going on. Do not carry that scene on as if they were still in it. Either someone there stops them, in which case say plainly that they are stopped and still where they were, or they are gone, in which case narrate where they are now and let what they walked out on have its consequences."""
 
 
 # The bookkeeper: a helper that turns the narrator's prose into recorded changes.
 
-def bookkeeper_prompt(card, state, player_text, results, narration, quests=True):
+def bookkeeper_prompt(card, state, player_text, results, narration, quests=True, prompts=None):
     """state is the game as it stands after the player's own actions were applied. quests is False
     when a separate quest judge is deciding quest progress, so the bookkeeper leaves quests alone."""
     lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need) and (quests or need != "quests")]
@@ -185,54 +158,25 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True)
         checks.append("- Relationships, when a character's feeling toward the player has plainly shifted.")
     if uses(card, "battle"):
         checks.append("- Fights. If a fight breaks out in the text, start_battle with the characters fighting the player, and record nothing of the blows.")
-    system = """\
-You are the bookkeeper of a text adventure. A narrator has just written the next part of the story. Your job is to record what that text changed, so the game stays true to the story. The narrator records nothing; if you miss a change, the game is wrong from then on.
-
-Read the new text against the game state and list every change it shows, using only these actions, with ids taken from the game state. WHO is "player" or a character id.
-%s
-
-Go through these every time:
-%s
-
-Rules:
-- Record what the text shows happening, not what might happen next or what someone only talks about.
-- The engine results listed for this turn are already recorded. Do not record them again.
-- Use the exact ids from the game state. If the text names something that has no id, use the closest action that fits, or leave it out.
-- When nothing changed, the list is empty. That is a normal answer.%s
-
-Reply with JSON only: {"actions": [ ... ]}""" % ("\n".join(lines), "\n".join(checks), states_reference(card, record=False).replace("{{user}}", "the player"))
+    system = prompt_text(prompts, "record_changes", actions="\n".join(lines), checks="\n".join(checks),
+                         states=states_reference(card, record=False).replace("{{user}}", "the player"))
     already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
     earlier = "\n\n".join(t["narration"][-600:] for t in state["history"][-2:])
     user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
-        describe_state(card, state), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
+        describe_state(card, state, focus="%s\n%s" % (player_text, narration)), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
         "[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else "", player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 
 # The quest judge: a helper whose only job is to decide whether quests have moved on.
 
-def judge_prompt(card, state, player_text, narration, turns=5):
-    system = """\
-You are the quest judge of a text adventure. Decide, strictly, whether each quest in progress has moved on. You are given every such quest's current objective and the recent story, ending with the newest text.
-
-Give one verdict for each quest in progress:
-- "done": the current objective is completely finished in the story. Every part of it has happened and is over. If it has several parts (several tests, several rooms, several opponents), all of them are over. If it gives a "Finished only when", that has plainly happened.
-- "failed": only if the quest gives a "Fails if" and that has happened, or the story has made the quest impossible.
-- "not_yet": everything else, including an objective that has started, is going well, or is nearly over. This is the usual answer.
-
-When unsure, answer not_yet. Nothing is lost by moving on a turn later; moving on early skips part of the story.
-Judge only each quest's current objective, the one named with it. Later objectives do not exist for you.
-
-Under "start", list any quest from "Not started" that the newest text has clearly given to the player or set in motion. Otherwise leave it empty.
-
-Reply with JSON only. Give the reason before the verdict:
-{"verdicts": [{"quest": "quest_id", "objective": "objective_id", "why": "one short sentence", "verdict": "not_yet"}], "start": []}"""
-    active, waiting = [], []
+def judge_prompt(card, state, player_text, narration, turns=5, prompts=None):
+    system = prompt_text(prompts, "judge_quests")
+    active = []
+    waiting = ["- %s: %s" % (_named(quest, "title"), quest.get("description", "")) for quest in available_quests(card, state)]
     for quest in card.data.get("quests", []):
         progress = state["quests"].get(quest["id"])
-        if progress is None:
-            waiting.append("- %s: %s" % (_named(quest, "title"), quest.get("description", "")))
-        elif progress["status"] == "active":
+        if progress is not None and progress["status"] == "active":
             stage = quest["stages"][progress["stage"]]
             entry = "- %s. Current objective [%s], part %d of %d: %s" % (
                 _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
@@ -366,49 +310,54 @@ def _sheet(card, state, who):
     return parts
 
 
-def _unknown_places(card, state):
-    return [l for l in place_list(card, state) if not knows_place(state, l["id"])]
+def _unknown_places(card, state, text=None):
+    """Places the player has not found. Given the text in play, only the ones that could come up
+    now: next door to where the player is, or named by that text or by the objective being played.
+    A hidden place on the far side of the map is nothing the reader needs yet."""
+    hidden = [l for l in place_list(card, state) if not knows_place(state, l["id"])]
+    if text is None or not hidden:
+        return hidden
+    here = state["actors"][PLAYER]["location"]
+    near = set(l["id"] for l in _exits(card, state, here)) if here in places(card, state) else set()
+    for quest_id, progress in state["quests"].items():
+        if progress["status"] == "active" and quest_id in card.quests:
+            stage = card.quests[quest_id]["stages"][progress["stage"]]
+            text += "\n" + "\n".join(stage.get(key) or "" for key in ("description", "guidance", "hint", "done_when"))
+    return [l for l in hidden if l["id"] in near or (l.get("name") and re.search(r"(?<!\w)%s(?!\w)" % re.escape(l["name"]), text, re.I))]
 
 
 def describe_scene(card, state):
-    """A short briefing for the narrator on the scene as it stands: who is in it, who is not, and
+    """A short briefing for the narrator on the scene as it stands: where it is, who is in it and
     what was going on. The facts are the engine's; the one line on what is happening is written by
-    the scene director after each reply. It exists so a model does not have to dig the cast of the
-    moment out of the stat sheets, and does not bring in someone who is in another room."""
+    the scene director after each reply. It names only who is there. People who are somewhere else
+    are not listed here, because a model tends to use whoever it is shown."""
     me = state["actors"][PLAYER]
     here = places(card, state).get(me["location"])
-    present, absent = [], []
+    present = []
     for who, actor in sorted(state["actors"].items()):
-        if who == PLAYER:
-            continue
-        doing = " (%s)" % actor["note"] if actor.get("note") else ""
-        if is_away(card, actor):
-            absent.append("%s, away: %s" % (actor["name"], describe_states(actor)))
-        elif actor["location"] is not None and actor["location"] == me["location"]:
-            present.append(actor["name"] + doing)
-        elif actor["location"] is None and not actor.get("note"):
-            absent.append("%s, not in the story yet" % actor["name"])
-        else:
-            place = places(card, state).get(actor["location"])
-            absent.append("%s, %s%s" % (actor["name"], "at " + place["name"] if place else "off the map", doing))
+        if who != PLAYER and actor["location"] is not None and actor["location"] == me["location"] and not is_away(card, actor):
+            present.append(actor["name"] + (" (%s)" % actor["note"] if actor.get("note") else ""))
     lines = ["[The scene right now]"]
     if here:
         lines.append("Place: %s." % here["name"])
-    lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
-    if absent:
-        lines.append("Not here: %s." % "; ".join(absent))
+    if card.characters:
+        lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
     if state.get("scene"):
         lines.append("What is going on: %s" % state["scene"])
     if card.characters:
-        lines.append("Only the people listed as with %s are in this scene. Nobody from \"Not here\" speaks or acts unless this reply shows them arriving, "
-                     "and nobody here is forgotten. An unnamed figure in the story so far is one of these characters when the description fits; "
-                     "do not turn them into someone else." % me["name"])
+        lines.append("These are the people in the scene. Someone else joins it only when your reply shows them arriving.")
     return "\n".join(lines)
 
 
-def describe_state(card, state, secrets=True):
+def describe_state(card, state, secrets=True, focus=None, cast=None, items=True):
     """secrets is False for helpers that speak for the player (their suggested replies, reading
-    their intent), which must not be told about places the player has not discovered."""
+    their intent), which must not be told about places the player has not discovered.
+
+    The rest keeps the state down to what the reader needs this turn. focus is the text in play
+    (what the player typed, what the story just said): a character in the scene gets their full
+    sheet when that text names them, and one line otherwise. cast is who has entered the story;
+    only they are mentioned as being elsewhere. items is whether to list every item that exists,
+    which only a reader who records changes by item id needs. Left out, everything is shown."""
     me = state["actors"][PLAYER]
     here = places(card, state).get(me["location"])
     lines = ["[Current game state]", "Player: %s (player)" % me["name"]]
@@ -421,20 +370,24 @@ def describe_state(card, state, secrets=True):
         further = [_named(l) for l in place_list(card, state) if l["id"] != here["id"] and l["id"] not in near and knows_place(state, l["id"])]
         if further:
             lines.append("Other places on the map, not reachable on foot from here: %s" % ", ".join(further))
-    if secrets and _unknown_places(card, state):
+    if secrets and _unknown_places(card, state, focus):
         lines.append("Places the player does not know of yet (not on their map; reveal one with reveal_location when the story shows it to them): %s" % "; ".join(
-            "%s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state)))
+            "%s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state, focus)))
     if state.get("travel_lock") is not None:
         lines.append("Travel: LOCKED for the player (%s) Use unlock_travel once nothing holds them." % state["travel_lock"])
     lines += _sheet(card, state, PLAYER)
 
     present, elsewhere = [], []
+    in_focus = set(named_in(card, focus)) if focus is not None else set()
     for who, actor in sorted(state["actors"].items()):
         if who == PLAYER:
             continue
-        doing = (" [%s]" % actor["note"] if actor.get("note") else "") + ("" if actor.get("known", True) else " [the player has not met them yet]")
+        doing = (" [%s]" % actor["note"] if actor.get("note") else "") + ("" if actor.get("known", True) else " [not met yet]")
         if actor["location"] == me["location"] and not is_away(card, actor):
-            present.append("- %s (%s)%s%s" % (actor["name"], who, doing, ": " + "; ".join(_sheet(card, state, who)) if _sheet(card, state, who) else ""))
+            sheet = _sheet(card, state, who) if focus is None or who in in_focus else _brief(card, state, who)
+            present.append("- %s (%s)%s%s" % (actor["name"], who, doing, ": " + "; ".join(sheet) if sheet else ""))
+        elif cast is not None and (who not in cast or (actor["location"] is None and not actor.get("note") and not is_away(card, actor))):
+            continue        # not in the story, or in it with no known whereabouts: there is nothing to say about where they are
         elif is_away(card, actor):
             elsewhere.append("%s (%s) is away: %s" % (actor["name"], who, describe_states(actor)))
         else:
@@ -455,7 +408,7 @@ def describe_state(card, state, secrets=True):
         lines.append("Shop here: %s sells %s" % (_named(shop), "; ".join(stock) or "nothing"))
 
     known = [_named(i) for i in card.data.get("items", [])] + [_named(i) for i in state["generated_items"].values()]
-    if known and uses(card, "inventory"):
+    if known and uses(card, "inventory") and items:
         lines.append("All items that exist: %s" % ", ".join(known))
     return "\n".join(lines)
 
@@ -465,15 +418,31 @@ def stage_guidance(stage):
     return stage.get("guidance") or stage.get("hint") or ""
 
 
+def _brief(card, state, who):
+    """One character in a line: what the scene needs of someone who is there but not being dealt
+    with right now. Their state, the stat fights are fought over, and how they feel about the player."""
+    actor = state["actors"][who]
+    parts = []
+    health = card.battle.get("health_stat") if uses(card, "stats") else None
+    if health and health in card.stats:
+        stat = card.stats[health]
+        top = stat_max(card, actor, health)
+        parts.append("%s %s%s" % (stat["name"], _fmt(effective_stat(card, state, who, health)), "/%s" % _fmt(top) if top is not None else ""))
+    if uses(card, "states") and actor.get("states"):
+        parts.append("State: %s" % describe_states(actor))
+    if uses(card, "relationships"):
+        parts.append("%s toward the player: %s/100" % (card.relationship_name, _fmt(actor["relationship"])))
+    return parts
+
+
 def describe_quests(card, state, detail="narrator"):
     """detail "narrator" includes how to play each objective and when it is over. "player" gives
     only what the player can see in their quest log, for helpers that speak for the player."""
-    active, available = [], []
+    active = []
+    available = ["- %s: %s" % (_named(quest, "title"), quest.get("description", "")) for quest in available_quests(card, state)]
     for quest in card.data.get("quests", []):
         progress = state["quests"].get(quest["id"])
-        if progress is None:
-            available.append("- %s: %s" % (_named(quest, "title"), quest.get("description", "")))
-        elif progress["status"] == "active":
+        if progress is not None and progress["status"] == "active":
             stage = quest["stages"][progress["stage"]]
             line = "- %s. Current objective [%s], part %d of %d: %s" % (
                 _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
@@ -489,20 +458,36 @@ def describe_quests(card, state, detail="narrator"):
     if active:
         lines += ["[Active quests]"] + active
     if available and detail == "narrator":
-        lines += ["[Quests not started yet]"] + available
+        lines += ["[Quests that can begin now]"] + available
     return "\n".join(lines)
 
 
-def describe_cast(card):
-    """Everyone in the card, the same on every turn. Who is in the scene right now is in the game state instead."""
+def arrivals(card, state, player_text):
+    """Ids of the characters entering the story with this turn: named by what the player just
+    typed or by the last reply, or now with the player, and not described to the story model yet.
+    The game keeps them with the turn (turn["cast"]) so the turn's message never changes."""
+    known = state.get("cast", [])
+    return [c for c in cast_in_play(card, state, "%s\n%s" % (player_text, last_narration(card, state))) if c not in known]
+
+
+def _entering(card, ids):
+    text = describe_cast(card, ids, heading="[Entering the story]") if ids else ""
+    return text + "\n\n" if text else ""
+
+
+def describe_cast(card, cast=None, heading="[Characters]"):
+    """Who the characters are. cast is the ids of those who have entered the story, in the order
+    they did; only they are described, in that order, so the text only ever grows at its end.
+    Left out, everyone in the card is described."""
     lines = []
-    for c in card.data.get("characters", []):
+    chosen = card.data.get("characters", []) if cast is None else [card.characters[c] for c in cast if c in card.characters]
+    for c in chosen:
         parts = ["%s: %s" % (c["name"], c["description"])]
         for label, key in (("Personality", "personality"), ("Appearance", "appearance"), ("How they talk", "dialogue_examples")):
             if c.get(key):
                 parts.append("%s: %s" % (label, c[key]))
         lines.append("\n".join(parts))
-    return "[Characters]\n" + "\n\n".join(lines) if lines else ""
+    return heading + "\n" + "\n\n".join(lines) if lines else ""
 
 
 def describe_lore(card, recent_text):
@@ -559,18 +544,28 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
     """
     world = card.data["world"]
     me = state["actors"][PLAYER]
+    ## What is in play this turn decides who is described and in how much detail. See state.cast_in_play.
+    in_play = "%s\n%s" % (player_text, last_narration(card, state))
+    cast = cast_in_play(card, state, in_play)
+    ## Someone who enters the story is described in the message of the turn they enter, and that
+    ## message is sent unchanged from then on. Describing them among the instructions instead would
+    ## change the start of the prompt, and the provider would have to read the whole story afresh.
+    ## Once that turn is folded into the summary, they are described with the rest.
+    entering = arrivals(card, state, player_text)
+    live = state["history"][state.get("summarized", 0):]
+    settled = [c for c in cast if c not in entering and not any(c in turn.get("cast", ()) for turn in live)]
     slots = {
         "world": lambda: "[World]\n%s%s" % (world["description"], "\n\n[Situation at the start]\n" + world["scenario"] if world.get("scenario") else ""),
         "narrator_instructions": lambda: world.get("narrator_instructions", ""),
         "persona": lambda: "[The player's character]\nName: %s%s%s" % (
             me["name"], "\n" + me["description"] if me.get("description") else "",
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
-        "characters": lambda: describe_cast(card),
+        "characters": lambda: describe_cast(card, settled),
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
-        "state": lambda: describe_scene(card, state) + "\n\n" + describe_state(card, state),
+        "state": lambda: describe_scene(card, state) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
         "quests": lambda: describe_quests(card, state),
         "summary": lambda: "[Story so far]\n" + state["summary"] if state["summary"] else "",
-        "action_protocol": lambda: action_protocol(card, record),
+        "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
     stable, tail, history_on, below_history, has_protocol = [], [], False, False, False
@@ -586,15 +581,15 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
         text = slots[slot]() if slot else block.get("content", "")
         if text:
             (tail if slot in VOLATILE_SLOTS or (not slot and below_history) else stable).append(text)
-    if not has_protocol and action_protocol(card, record):
-        stable.append(action_protocol(card, record))
+    if not has_protocol and action_protocol(card, record, preset.get("prompts")):
+        stable.append(action_protocol(card, record, preset.get("prompts")))
 
     messages = [{"role": "user", "content": OPENING_CUE}, {"role": "assistant", "content": opening(card, state)}]
-    for turn in state["history"][state.get("summarized", 0):] if history_on else []:
-        messages.append({"role": "user", "content": _turn_message(turn["player"], turn["results"])})
+    for turn in live if history_on else []:
+        messages.append({"role": "user", "content": _entering(card, turn.get("cast")) + _turn_message(turn["player"], turn["results"])})
         messages.append({"role": "assistant", "content": turn["narration"]})
     messages[-1]["cache"] = True
-    messages.append({"role": "user", "content": "\n\n".join(tail + [_turn_message(player_text, results)])})
+    messages.append({"role": "user", "content": "\n\n".join(tail + [_entering(card, entering) + _turn_message(player_text, results)])})
 
     return fill(card, state, "\n\n".join(stable)), [dict(m, content=fill(card, state, m["content"])) for m in messages]
 
@@ -625,21 +620,11 @@ def parse_narration(text):
 
 # Helper jobs.
 
-def resolver_prompt(card, state, player_text):
-    system = """\
-You are the rules clerk of a text adventure. Read the player's message and list the game actions the player's character is attempting right now.
-
-Only these actions exist for the player:
-""" + "\n".join(line for kind, need, line in PLAYER_ACTIONS if uses(card, need)) + """
-
-Rules:
-- Use ids from the game state. If the player names an item that is not in the state at all, use the player's own words as the item value; the engine will reject it.
-- List an attempt even when it looks impossible (the item is not in the inventory, there is not enough money). The engine decides. Never drop or correct an attempt.
-- Speech, looking around, picking things up from the scene and anything else outside the list above produce no actions; the narrator handles them.
-- Do not guess at things the player did not say.
-
-Reply with JSON only: {"actions": [ ... ]}. Use {"actions": []} when nothing applies."""
-    user = "%s\n\n[Last narration]\n%s\n\n[Player message]\n%s" % (describe_state(card, state, secrets=False), last_narration(card, state), player_text)
+def resolver_prompt(card, state, player_text, prompts=None):
+    system = prompt_text(prompts, "resolve_actions", actions="\n".join(line for kind, need, line in PLAYER_ACTIONS if uses(card, need)))
+    user = "%s\n\n[Last narration]\n%s\n\n[Player message]\n%s" % (
+        describe_state(card, state, secrets=False, focus="%s\n%s" % (player_text, last_narration(card, state)), cast=cast_in_play(card, state, player_text)),
+        last_narration(card, state), player_text)
     return system, [{"role": "user", "content": user}]
 
 
@@ -658,12 +643,11 @@ def parse_resolver(text, card):
     return actions
 
 
-def suggest_prompt(card, state, count):
-    system = """\
-You suggest what the player could do next in a text adventure. Give %d short, distinct options, written in first person as the player ("I ask Mira about the cellar."). Mix talking, acting and exploring. Only suggest using or buying things the game state shows are available. One sentence each.
-
-Reply with JSON only: {"choices": ["...", "..."]}""" % count
-    user = "%s\n\n%s\n\n[Last narration]\n%s" % (describe_state(card, state, secrets=False), describe_quests(card, state, "player"), last_narration(card, state))
+def suggest_prompt(card, state, count, prompts=None):
+    system = prompt_text(prompts, "suggest_choices", count=str(count))
+    user = "%s\n\n%s\n\n[Last narration]\n%s" % (
+        describe_state(card, state, secrets=False, focus=last_narration(card, state), cast=cast_in_play(card, state), items=False),
+        describe_quests(card, state, "player"), last_narration(card, state))
     return system, [{"role": "user", "content": user}]
 
 
@@ -673,9 +657,8 @@ def parse_suggestions(text, count):
     return [c.strip() for c in choices if isinstance(c, str) and c.strip()][:count]
 
 
-def summary_prompt(card, state, turns):
-    system = """\
-You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Leave out inventory, money and stats; the game tracks those. At most 250 words. Reply with the summary only."""
+def summary_prompt(card, state, turns, prompts=None):
+    system = prompt_text(prompts, "summarize")
     scenes = "\n\n".join("Player: %s\nNarrator: %s" % (t["player"], t["narration"]) for t in turns)
     user = "[Existing summary]\n%s\n\n[New scenes]\n%s" % (state["summary"] or "(none yet)", scenes)
     return system, [{"role": "user", "content": fill(card, state, user)}]
@@ -709,38 +692,16 @@ def _looks(character):
     return "Looks: %s " % (text[:160].rstrip(".") + ".") if text else ""
 
 
-def director_prompt(card, state, paragraphs):
-    system = """\
-You are the stage director of a visual novel. The narrator's latest text is given as numbered paragraphs. Work out four things from it.
-
-1. Who speaks. For each paragraph:
-- speaker: the id of the character whose spoken words make up the paragraph, or null when it is narration, description, or the player's own speech. A paragraph that is mostly one character talking, with a short "she says" around it, belongs to that character.
-- expression: how that speaker looks while saying it, chosen only from that character's listed expressions. Use null when speaker is null.
-
-2. Where the characters are now. For each character whose place or activity the text changes or shows, give:
-- location: "here" if they end the text in the player's company; a location id if they went to or are at that place; null if they left for somewhere that is not on the list or are otherwise out of reach.
-- note: a few words on what they are doing or where they went, such as "tending the bar" or "rode off toward the capital".
-Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here".
-
-The text does not always use names. Work out who an unnamed person is ("a skinny boy", "the woman behind the bar") from each character's listed looks and from where they were before this text. If you cannot tell which character someone is, leave them out of both lists rather than guess.
-
-3. Which hidden places the player just learned of. If a list of places the player does not know of is given, name the ids of any that this text shows or tells the player about: they are told it exists, see the way to it, or are taken there. A place that is merely near is not revealed.
-
-4. What is going on. Under "scene", one or two plain sentences on how things stand at the end of this text: who is with the player and doing what, and what is left hanging. Use names. It is a note for the narrator's next reply, so state facts from the text and add nothing.
-
-Reply with JSON only:
-{"paragraphs": [{"n": 1, "speaker": "some_id", "expression": "neutral"}, {"n": 2, "speaker": null, "expression": null}],
- "whereabouts": [{"id": "some_id", "location": "here", "note": "..."}],
- "revealed": ["some_location_id"],
- "scene": "..."}"""
+def director_prompt(card, state, paragraphs, prompts=None):
+    system = prompt_text(prompts, "direct_scene")
     me = state["actors"][PLAYER]
     cast = "\n".join("- %s (id: %s). %sExpressions: %s. Before this text: %s" % (
         c["name"], c["id"], _looks(c), ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
     here = places(card, state).get(me["location"])
     listing = "\n[Locations]\nThe player is at %s.\n%s\n" % (_named(here), ", ".join(_named(l) for l in place_list(card, state))) if here else ""
-    if _unknown_places(card, state):
+    if _unknown_places(card, state, "\n".join(paragraphs)):
         listing += "\n[Places the player does not know of yet]\n%s\n" % "\n".join(
-            "- %s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state))
+            "- %s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state, "\n".join(paragraphs)))
     numbered = "\n\n".join("%d. %s" % (n + 1, p) for n, p in enumerate(paragraphs))
     return system, [{"role": "user", "content": "[Characters]\n%s\n%s\n[Paragraphs]\n%s" % (cast, listing, numbered)}]
 

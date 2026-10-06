@@ -375,6 +375,8 @@ def _quest_start(card, state, a):
     qid, quest = _find(card.quests, a.get("quest"), "quest")
     if qid in state["quests"]:
         raise Rejected("Quest %s was already started." % quest["title"])
+    if quest.get("after") and state["quests"].get(quest["after"], {}).get("status") != "done":
+        raise Rejected("Quest %s cannot begin until %s is finished." % (quest["title"], card.quests[quest["after"]]["title"]))
     state["quests"][qid] = {"status": "active", "stage": 0}
     state["quests"][qid]["met"] = quest_marks(card, state, quest)
     return "Quest started: %s. Objective: %s" % (quest["title"], quest["stages"][0]["description"])

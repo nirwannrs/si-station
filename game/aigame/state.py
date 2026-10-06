@@ -4,6 +4,7 @@ It is built from plain dicts, lists, strings and numbers only, so it pickles int
 can be deep-copied for undo. The card itself is never stored in it.
 """
 
+import re
 from .card import PLAYER
 
 
@@ -125,6 +126,9 @@ def new_game(card, persona=None):
     }
     for quest_id, progress in state["quests"].items():
         progress["met"] = quest_marks(card, state, card.quests[quest_id])
+    # character ids in the order they entered the story. See cast_in_play.
+    state["cast"] = []
+    state["cast"] = cast_in_play(card, state)
     return state
 
 
@@ -174,6 +178,10 @@ def reconcile(card, state):
     """
     fresh = new_game(card)
     notes = []
+    if "cast" not in state:
+        # A save from before the cast was tracked: everyone the story has named so far has entered it.
+        told = "\n".join("%s\n%s" % (t["player"], t["narration"]) for t in state.get("history", []))
+        state["cast"] = [c for c in fresh["cast"]] + [c for c in named_in(card, told) if c not in fresh["cast"]]
     for key, value in fresh.items():
         state.setdefault(key, value)
 
@@ -332,3 +340,71 @@ def stage_met(card, state, stage):
 def quest_marks(card, state, quest):
     """Ids of the quest's objectives whose game-checked conditions hold right now."""
     return [s["id"] for s in quest["stages"] if stage_met(card, state, s)]
+
+
+# Who and what the story model needs to hear about. A model uses whatever it is shown, so the
+# rule throughout is to show only what is in play: the people who have entered the story, the
+# quests that can begin now. Nothing is listed in order to say "not this".
+
+def named_in(card, text):
+    """Ids of the characters a text names, in card order. A full name matches in any case; a first
+    name must be written as a name ("Mira", not "the marsh" for someone called Marsh Bandit)."""
+    found = []
+    for character in card.data.get("characters", []):
+        name = character["name"].strip()
+        first = name.split()[0] if name else ""
+        if not name:
+            continue
+        if re.search(r"(?<!\w)%s(?!\w)" % re.escape(name), text, re.I) or (len(first) >= 3 and re.search(r"(?<!\w)%s(?!\w)" % re.escape(first), text)):
+            found.append(character["id"])
+    return found
+
+
+def cast_in_play(card, state, text=""):
+    """The characters who have entered the story, in the order they did: those already noted, then
+    anyone now with the player, anyone the given text names (what the player just typed, what the
+    story just said), and anyone the card's own direction names (its opening and scenario, and
+    the objective being played). The list only ever grows at its end, which keeps what was sent
+    before identical for the provider's cache."""
+    me = state["actors"][PLAYER]
+    world = card.data.get("world", {})
+    told = [text, world.get("opening", ""), world.get("scenario", ""), world.get("narrator_instructions", "")]
+    for quest_id, progress in state.get("quests", {}).items():
+        quest = card.quests.get(quest_id)
+        if quest and progress["status"] == "active":
+            stage = quest["stages"][min(progress["stage"], len(quest["stages"]) - 1)]
+            told += [stage.get("description", ""), stage.get("guidance") or stage.get("hint") or "", stage.get("done_when", ""), quest.get("fail_when", "")]
+    named = set(named_in(card, "\n".join(told)))
+    cast = [c for c in state.get("cast", []) if c in card.characters]
+    for character in card.data.get("characters", []):
+        who = character["id"]
+        actor = state["actors"].get(who)
+        here = actor is not None and actor["location"] is not None and actor["location"] == me["location"]
+        if who not in cast and (here or who in named):
+            cast.append(who)
+    return cast
+
+
+def note_cast(card, state, text=""):
+    """Records who has entered the story by now. Call it with each new piece of story."""
+    state["cast"] = cast_in_play(card, state, text)
+
+
+def available_quests(card, state):
+    """Quests that have not begun and could begin now. One that follows another waits for it to be
+    done. One that names who gives it or where it starts is only on offer with that character
+    present or at that place; one that names neither can start anywhere."""
+    me = state["actors"][PLAYER]
+    found = []
+    for quest in card.data.get("quests", []):
+        if quest["id"] in state["quests"]:
+            continue
+        if quest.get("after") and state["quests"].get(quest["after"], {}).get("status") != "done":
+            continue
+        giver, place = state["actors"].get(quest.get("giver")), quest.get("start_location")
+        if quest.get("giver") or place:
+            with_giver = giver is not None and giver["location"] is not None and giver["location"] == me["location"] and not is_away(card, giver)
+            if not (with_giver or (place and place == me["location"])):
+                continue
+        found.append(quest)
+    return found

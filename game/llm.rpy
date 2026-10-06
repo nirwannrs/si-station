@@ -11,6 +11,8 @@ default persistent.enter_newline = False
 ## The player's own copy of the preset's blocks, once they change anything on the Preset screen. None
 ## means the shipped preset is used as it comes.
 default persistent.preset = None
+## Which file in the presets folder is in use. None is the one that comes with the game.
+default persistent.preset_file = None
 ## The player's own generation settings, set on the Parameters screen. None until first opened or used,
 ## then a copy of the preset's values that the player can change. Numbers typed into boxes are kept as text.
 default persistent.params = None
@@ -32,6 +34,7 @@ init python:
     import copy
     import json
     from aigame import llm as aig_llm
+    from aigame import wording as aig_wording
     from aigame import prompt as aig_prompt
 
     HELPER_SAMPLING = {"temperature": 0.2, "max_tokens": 1000}
@@ -72,6 +75,8 @@ init python:
         context_lookup = None
         # how the instruction being edited on the Preset screen stood before the editor opened
         preset_edit = None
+        # the same for one of the game's own prompts: {"key", "had", "before"}
+        wording_edit = None
 
     runtime = Runtime()
 
@@ -234,27 +239,76 @@ init python:
 
     preset_cache = {}
 
+    def preset_folder():
+        return os.path.join(config.basedir, "presets")
+
+    def read_preset(name):
+        """One file from the presets folder, read again whenever it changes on disk, so a preset
+        being worked on in the creator is picked up without restarting the game. None if the file
+        is missing or the game cannot use it."""
+        path = os.path.join(preset_folder(), name + ".preset.json")
+        try:
+            stamp = os.path.getmtime(path)
+            if preset_cache.get(name, (None, None))[0] != stamp:
+                with open(path, "rb") as f:
+                    loaded = json.loads(f.read().decode("utf-8"))
+                preset_cache[name] = (stamp, None if aig_wording.check_preset(loaded) else loaded)
+            return preset_cache[name][1]
+        except (IOError, OSError, ValueError):
+            return None
+
+    def preset_files():
+        """(file name without its ending, the preset's own name) for every usable preset, the game's own first."""
+        try:
+            names = sorted(n[:-len(".preset.json")] for n in os.listdir(preset_folder()) if n.endswith(".preset.json"))
+        except OSError:
+            names = []
+        names = [n for n in names if read_preset(n)]
+        return [(n, read_preset(n)["name"]) for n in sorted(names, key=lambda n: (n != "default", n))]
+
     def shipped_preset():
-        """The preset file that comes with the game."""
-        if "preset" not in preset_cache:
-            with open(os.path.join(config.basedir, "presets", "default.preset.json"), "rb") as f:
-                preset_cache["preset"] = json.loads(f.read().decode("utf-8"))
-        return preset_cache["preset"]
+        """The preset file in use: the one the player chose, or the one that comes with the game."""
+        return (persistent.preset_file and read_preset(persistent.preset_file)) or read_preset("default")
 
     def active_preset():
-        """The preset in use: the shipped one, with the player's own blocks in place of its blocks
-        once they have changed anything on the Preset screen."""
-        shipped = shipped_preset()
-        return dict(shipped, blocks=persistent.preset["blocks"]) if persistent.preset else shipped
+        """The preset in use: the chosen file, with whatever the player changed on the Preset screen
+        laid over it. Their instructions replace the file's as a whole once they touch any; each of
+        the game's own prompts they reword replaces only that prompt."""
+        shipped, mine = shipped_preset(), persistent.preset or {}
+        prompts = dict(shipped.get("prompts") or {})
+        prompts.update(mine.get("prompts") or {})
+        return dict(shipped, blocks=mine.get("blocks") or shipped["blocks"], prompts=prompts)
+
+    def own_blocks():
+        return bool(persistent.preset and persistent.preset.get("blocks"))
+
+    def preset_changed():
+        return bool(persistent.preset and (persistent.preset.get("blocks") or persistent.preset.get("prompts")))
 
     def preset_blocks():
         """The player's own copy of the blocks, made the first time they change something."""
-        if not persistent.preset:
+        if not own_blocks():
             blocks = copy.deepcopy(shipped_preset()["blocks"])
             for block in blocks:
                 block.setdefault("enabled", True)
-            persistent.preset = {"blocks": blocks}
+            if persistent.preset is None:
+                persistent.preset = {}
+            persistent.preset["blocks"] = blocks
         return persistent.preset["blocks"]
+
+    def drop_own(key):
+        """Forgets the player's own blocks or prompts, and the whole record once nothing is left in it."""
+        if persistent.preset:
+            persistent.preset.pop(key, None)
+            if not persistent.preset.get("blocks") and not persistent.preset.get("prompts"):
+                persistent.preset = None
+
+    def preset_choose(name):
+        """Switches to another preset file. The player's own changes belonged to the old one."""
+        persistent.preset_file = None if name == "default" else name
+        persistent.preset = None
+        input_fields.clear()
+        renpy.restart_interaction()
 
     def reset_preset():
         persistent.preset = None
@@ -299,12 +353,12 @@ init python:
     def preset_open_editor(index):
         """Opens an instruction for editing. Returns nothing: a value returned by a button's function
         closes the menu the button is on."""
-        had_copy = bool(persistent.preset)
+        had_copy = own_blocks()
         preset_blocks()         # editing works on the player's own copy, so make it if this is the first change
         preset_begin_edit(index, False, had_copy)
 
     def preset_add_and_edit(after_history):
-        had_copy = bool(persistent.preset)
+        had_copy = own_blocks()
         preset_begin_edit(preset_add(after_history), True, had_copy)
 
     def preset_cancel_edit():
@@ -320,7 +374,46 @@ init python:
             blocks[edit["index"]].clear()
             blocks[edit["index"]].update(edit["before"])
         if not edit["had_copy"]:
-            persistent.preset = None    # nothing else had been changed, so go back to the shipped preset
+            drop_own("blocks")       # nothing else had been changed, so go back to the preset file's own
+        input_fields.clear()
+        renpy.restart_interaction()
+
+    ## The game's own prompts (aigame/wording.py). Each can be reworded; the player's wording is kept
+    ## in persistent.preset["prompts"] and only for the prompts they actually changed.
+
+    def wording_default(key):
+        """What the prompt says when the player has not reworded it: the preset file's wording, else the game's."""
+        return (shipped_preset().get("prompts") or {}).get(key) or aig_wording.builtin_prompt(key)["text"]
+
+    def wording_is_own(key):
+        return bool(persistent.preset and key in (persistent.preset.get("prompts") or {}))
+
+    def wording_open_editor(key):
+        if persistent.preset is None:
+            persistent.preset = {}
+        mine = persistent.preset.setdefault("prompts", {})
+        runtime.wording_edit = {"key": key, "had": key in mine, "before": mine.get(key)}
+        mine.setdefault(key, wording_default(key))
+        renpy.show_screen("wording_edit", key=key)
+        renpy.restart_interaction()
+
+    def wording_close(keep):
+        """Done keeps the new wording, unless it is the same as the default after all. Cancel puts back what was there."""
+        edit, mine = runtime.wording_edit, persistent.preset["prompts"]
+        renpy.hide_screen("wording_edit")
+        if not keep and edit["had"]:
+            mine[edit["key"]] = edit["before"]
+        elif not keep or not mine[edit["key"]].strip() or mine[edit["key"]] == wording_default(edit["key"]):
+            del mine[edit["key"]]
+        if not mine:
+            drop_own("prompts")
+        input_fields.clear()
+        renpy.restart_interaction()
+
+    def wording_reset(key):
+        persistent.preset["prompts"].pop(key, None)
+        if not persistent.preset["prompts"]:
+            drop_own("prompts")
         input_fields.clear()
         renpy.restart_interaction()
 
@@ -425,10 +518,13 @@ init python:
             ## A card with nothing the player can act on skips the call that works out their actions.
             attempts = []
             if resolve and aig_prompt.player_action_types(card):
-                attempts = aig_prompt.parse_resolver(run_helper("resolve_actions", aig_prompt.resolver_prompt(card, state, text)), card)
+                attempts = aig_prompt.parse_resolver(run_helper("resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"])), card)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
 
             keeper = bookkeeping()
+            ## Whoever the player just named, or the last reply did, enters the story with this turn. The
+            ## story model is told who they are in this turn's message, which is kept as it was sent.
+            entering = aig_prompt.arrivals(card, state, text)
             system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper)
             reply = llm_call("main", system, messages, story_sampling())
             narration, world_actions = aig_prompt.parse_narration(reply)
@@ -441,9 +537,9 @@ init python:
                 ## a quest has moved on. If the bookkeeper fails, anything the story model reported by
                 ## itself is used; if the judge fails, quests simply stay where they are this turn.
                 judged = bool(card.quests)
-                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged))}
+                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"]))}
                 if judged:
-                    jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration))
+                    jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration, prompts=preset["prompts"]))
                 answers = run_helpers_together(jobs)
                 if not isinstance(answers["books"], Exception):
                     world_actions = aig_prompt.parse_bookkeeper(answers["books"])
@@ -462,7 +558,7 @@ init python:
             return
 
         state["pending_results"] = []
-        turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results],
+        turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "cast": entering,
                 "narration": narration, "direction": direct_scene(card, state, narration)}
         if runtime.cut_short:
             ## Kept apart from the results: it is for the player, and is never sent to the model.
@@ -470,6 +566,7 @@ init python:
                               "anything it changed at the very end may be missing. Raise Response length in Menu > Parameters.") % story_sampling()["max_tokens"]
         ## From here the turn counts as played: nothing below may pause before these three lines are done.
         state["history"].append(turn)
+        state["cast"] = state.get("cast", []) + [c for c in entering if c not in state.get("cast", [])]
         state["turn"] += 1
         state["open"] = False
         ## What the turn started from becomes what Undo goes back to.
@@ -485,7 +582,7 @@ init python:
         if not card.characters:
             return aig_prompt.parse_direction("", card, len(paragraphs))
         try:
-            reply = run_helper("direct_scene", aig_prompt.director_prompt(card, state, paragraphs))
+            reply = run_helper("direct_scene", aig_prompt.director_prompt(card, state, paragraphs, prompts=active_preset()["prompts"]))
         except aig_llm.LLMError:
             reply = ""
         aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card, state))
@@ -599,7 +696,7 @@ init python:
                 return
             old = seen[:max(1, len(seen) // 2)]
             try:
-                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old))
+                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old, prompts=preset["prompts"]))
             except aig_llm.LLMError:
                 return
             state["summarized"] = state.get("summarized", 0) + len(old)
@@ -659,7 +756,7 @@ init python:
         if not conf.get("enabled", True):
             return
         count, turn = conf.get("count", 3), store.game_state["turn"]
-        prompt = aig_prompt.suggest_prompt(current_card(), store.game_state, count)
+        prompt = aig_prompt.suggest_prompt(current_card(), store.game_state, count, prompts=active_preset()["prompts"])
 
         def done(reply):
             runtime.suggesting = False
@@ -914,13 +1011,29 @@ screen story_log(turns=HISTORY_MENU_TURNS):
 screen preset():
     tag menu
     default show_builtin = False
+    default show_wording = False
 
     use game_menu(_("Preset"), scroll="viewport"):
         $ blocks = active_preset()["blocks"]
+        $ files = preset_files()
 
         vbox:
             spacing 18
             text _("What the story model is told before it writes. Each line is one instruction: tick it to use it, or edit its wording. Changes are yours, on this device, for every card.") size 24
+
+            if len(files) > 1:
+                vbox:
+                    spacing 4
+                    text _("Presets are files in the game's presets folder. Make and edit them in the card creator, under Presets.") size 22 color "#999999"
+                    hbox:
+                        spacing 30
+                        box_wrap True
+                        style_prefix "radio"
+                        for name, title in files:
+                            if preset_changed() and name != (persistent.preset_file or "default"):
+                                textbutton esc(title) action Confirm(_("Switch preset? The changes you made here to the current one will be removed."), Function(preset_choose, name)) selected False
+                            else:
+                                textbutton esc(title) action Function(preset_choose, name) selected (name == (persistent.preset_file or "default"))
 
             hbox:
                 spacing 30
@@ -928,7 +1041,7 @@ screen preset():
                     style_prefix "check"
                     xsize 700
                     textbutton _("Also show the built-in parts") action ToggleScreenVariable("show_builtin")
-                if persistent.preset:
+                if preset_changed():
                     textbutton _("Reset to the original") action Confirm(_("Put the preset back as it came? Your own instructions and edits will be removed."), Function(reset_preset)) yalign 0.5
 
             for index, block in enumerate(blocks):
@@ -942,7 +1055,7 @@ screen preset():
                             vbox:
                                 style_prefix "check"
                                 xsize 760
-                                textbutton esc(block["name"]) action Function(preset_toggle, index) selected (fixed or block.get("enabled", True)) sensitive (not fixed)
+                                textbutton esc(block["name"] + ("   (built in)" if builtin else "")) action Function(preset_toggle, index) selected (fixed or block.get("enabled", True)) sensitive (not fixed)
                             if not builtin:
                                 textbutton _("Edit") action Function(preset_open_editor, index) text_size 26 yalign 0.5
                             textbutton _("Up") action Function(preset_move, index, -1) text_size 26 yalign 0.5 sensitive (index > 0)
@@ -961,7 +1074,72 @@ screen preset():
                 textbutton _("Add an instruction") action Function(preset_add_and_edit, False)
                 textbutton _("Add a reminder after the story") action Function(preset_add_and_edit, True)
 
+            null height 10
+            vbox:
+                style_prefix "check"
+                xsize 900
+                textbutton _("Show the game's own prompts (advanced)") action ToggleScreenVariable("show_wording")
+            if show_wording:
+                text _("The wording the game itself uses: how it explains the rules to the story model, and the whole prompt of each helper job. Reword one to suit a model that keeps getting something wrong. Reset puts the original back.") size 22 color "#999999"
+                for reader, heading in (("story", _("Told to the story model")), ("helper", _("Helper jobs"))):
+                    label heading
+                    for entry in aig_wording.BUILTIN_PROMPTS:
+                        if entry["reader"] == reader:
+                            vbox:
+                                spacing 2
+                                hbox:
+                                    spacing 18
+                                    text esc(entry["title"] + ("  (reworded)" if wording_is_own(entry["key"]) else "")) xsize 760 yalign 0.5 color ("#ffd28a" if wording_is_own(entry["key"]) else "#ffffff")
+                                    textbutton _("Edit") action Function(wording_open_editor, entry["key"]) text_size 26 yalign 0.5
+                                    if wording_is_own(entry["key"]):
+                                        textbutton _("Reset") action Confirm(_("Put this prompt back to its original wording?"), Function(wording_reset, entry["key"])) text_size 26 yalign 0.5
+                                text esc(entry["help"]) size 22 color "#999999"
+
             text _("Instructions above the story are sent once and cached, so they cost little. A reminder after the story is sent with every message: it costs a few tokens each turn, but models pay it the most attention. The order matters most among the instructions themselves; the game always sends its changing parts (state, quests, lore) with the newest message.") size 22 color "#999999"
+
+
+## Editing one of the game's own prompts. Like preset_edit, it only reads.
+screen wording_edit(key):
+    modal True
+    zorder 20
+    $ entry = aig_wording.builtin_prompt(key)
+    $ mine = (persistent.preset or {}).get("prompts") or {}
+
+    add "#000000c0"
+    if key in mine:
+        frame:
+            align (0.5, 0.5)
+            xsize 1500
+            ysize 960
+            padding (40, 30)
+
+            vbox:
+                spacing 12
+                label esc(entry["title"])
+                text esc(entry["help"]) size 22 color "#999999"
+                if entry["parts"]:
+                    text esc("The game fills these in; keep them where they should appear: " + "; ".join("{{%s}} is %s" % (name, what) for name, what in sorted(entry["parts"].items()))) size 22 color "#ffd28a"
+                if "JSON" in entry["text"]:
+                    text _("Keep the part that says how to reply (the JSON shape). The game reads the reply by that shape.") size 22 color "#ffd28a"
+                text esc("EDITABLE  " + entry["where"]) size 22 color "#7fd18b"
+                button:
+                    xfill True
+                    ysize (430 if entry["sends"] else 520)
+                    padding (16, 12)
+                    background "#00000080"
+                    action settings_field(mine, key).Toggle()
+                    viewport:
+                        scrollbars "vertical"
+                        mousewheel True
+                        input value settings_field(mine, key) multiline True copypaste True xmaximum 1340
+                if entry["sends"]:
+                    text esc("BUILT IN  Sent under it, in this order, written by the game each time: " + "   ".join(section["heading"] for section in entry["sends"])) size 22 color "#999999"
+
+            hbox:
+                align (1.0, 1.0)
+                spacing 40
+                textbutton _("Cancel") action Function(wording_close, False)
+                textbutton _("Done") action Function(wording_close, True)
 
 
 ## Editing one instruction. It must only read: Ren'Py draws screens ahead of time to have them

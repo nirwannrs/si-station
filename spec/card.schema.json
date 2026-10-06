@@ -299,6 +299,9 @@
           "title": { "type": "string" },
           "description": { "type": "string" },
           "auto_start": { "type": "boolean", "default": false },
+          "giver": { "$ref": "#/$defs/id", "description": "A character who hands this quest out. While it has not begun, the models are only told of it when that character is with the player (or the player is at start_location). Leave both out for a quest that can begin anywhere." },
+          "start_location": { "$ref": "#/$defs/id", "description": "A place where this quest begins. While it has not begun, the models are only told of it when the player is there (or its giver is present)." },
+          "after": { "$ref": "#/$defs/id", "description": "Another quest that must be finished first. Until then this one cannot begin and the models are not told of it. Use it to chain story arcs." },
           "fail_when": { "type": "string", "description": "Narrator-only: what makes the quest fail, for example the player leaving before it is done." },
           "stages": {
             "type": "array",

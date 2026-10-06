@@ -40,6 +40,11 @@
         "count": { "type": "integer", "minimum": 1, "maximum": 6, "default": 3 }
       }
     },
+    "prompts": {
+      "description": "Replacements for the game's own wording, by name: how the rules are explained to the story model (narrator_mechanics, narrator_prose, narrator_records, leaving_prose, leaving_records) and the whole prompt of each helper job (resolve_actions, record_changes, judge_quests, direct_scene, suggest_choices, summarize). Leave one out to use the game's own. The defaults, and which {{parts}} the game fills in for each, are in game/aigame/wording.py; the creator's preset builder shows them. A part left out of a replacement is added at its end.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "blocks": {
       "description": "Prompt is built top to bottom from enabled blocks, with one rule that overrides the order: the slots that change during play (summary, lorebook, state, quests) are always sent with the newest message, after the history. That keeps the start of the prompt identical from turn to turn, which is what lets providers cache it. Text blocks placed below the history slot are sent there too.",
       "type": "array",
