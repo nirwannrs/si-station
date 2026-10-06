@@ -8,6 +8,9 @@ default persistent.llm = None
 default skip_resolve = False
 ## The player's choice of what Enter does in the story input: False sends, True starts a new line.
 default persistent.enter_newline = False
+## The player's own copy of the preset's blocks, once they change anything on the Preset screen. None
+## means the shipped preset is used as it comes.
+default persistent.preset = None
 ## The player's own generation settings, set on the Parameters screen. None until first opened or used,
 ## then a copy of the preset's values that the player can change. Numbers typed into boxes are kept as text.
 default persistent.params = None
@@ -67,6 +70,8 @@ init python:
         busy = False
         # the model whose context size is being looked up right now, so it is only asked for once
         context_lookup = None
+        # how the instruction being edited on the Preset screen stood before the editor opened
+        preset_edit = None
 
     runtime = Runtime()
 
@@ -176,6 +181,35 @@ init python:
             lines.append(line("Small tasks (%d calls)" % len(helpers), helpers))
         return lines
 
+    def run_helpers_together(jobs):
+        """Runs several helper jobs at once and waits for them all. jobs maps a name to (task, prompt);
+        the result maps each name to the reply text, or to the error that job ended with.
+
+        They only read the story, so nothing they do depends on another's answer, and running them
+        side by side costs the player the wait of the slowest one, not of all of them added up.
+        """
+        answers = {}
+
+        def work(name, task, prompt, threaded):
+            try:
+                answers[name] = run_helper(task, prompt, threaded=threaded)
+            except Exception as e:
+                answers[name] = e
+
+        if renpy.emscripten or len(jobs) < 2:
+            for name, (task, prompt) in jobs.items():
+                work(name, task, prompt, False)
+            return answers
+
+        import threading
+        threads = [threading.Thread(target=work, args=(name, task, prompt, True)) for name, (task, prompt) in jobs.items()]
+        for thread in threads:
+            thread.daemon = True
+            thread.start()
+        while any(thread.is_alive() for thread in threads):
+            renpy.pause(0.05, hard=True)        # keeps the screen alive while waiting
+        return answers
+
     def usage_brief():
         """One short line about the last story reply's cost, for the play screen. Empty before the first reply."""
         story = [c for c in runtime.usage if c["what"] == "story"]
@@ -200,11 +234,110 @@ init python:
 
     preset_cache = {}
 
-    def active_preset():
+    def shipped_preset():
+        """The preset file that comes with the game."""
         if "preset" not in preset_cache:
             with open(os.path.join(config.basedir, "presets", "default.preset.json"), "rb") as f:
                 preset_cache["preset"] = json.loads(f.read().decode("utf-8"))
         return preset_cache["preset"]
+
+    def active_preset():
+        """The preset in use: the shipped one, with the player's own blocks in place of its blocks
+        once they have changed anything on the Preset screen."""
+        shipped = shipped_preset()
+        return dict(shipped, blocks=persistent.preset["blocks"]) if persistent.preset else shipped
+
+    def preset_blocks():
+        """The player's own copy of the blocks, made the first time they change something."""
+        if not persistent.preset:
+            blocks = copy.deepcopy(shipped_preset()["blocks"])
+            for block in blocks:
+                block.setdefault("enabled", True)
+            persistent.preset = {"blocks": blocks}
+        return persistent.preset["blocks"]
+
+    def reset_preset():
+        persistent.preset = None
+        input_fields.clear()
+        renpy.restart_interaction()
+
+    def preset_toggle(index):
+        block = preset_blocks()[index]
+        block["enabled"] = not block.get("enabled", True)
+        renpy.restart_interaction()
+
+    def preset_move(index, step):
+        blocks = preset_blocks()
+        if 0 <= index + step < len(blocks):
+            blocks[index], blocks[index + step] = blocks[index + step], blocks[index]
+        renpy.restart_interaction()
+
+    def preset_delete(index):
+        del preset_blocks()[index]
+        renpy.restart_interaction()
+
+    def preset_add(after_history):
+        """Adds an empty instruction and returns its position, so the editor can open on it."""
+        blocks = preset_blocks()
+        taken = set(b["id"] for b in blocks)
+        n = 1
+        while "custom_%d" % n in taken:
+            n += 1
+        block = {"id": "custom_%d" % n, "name": "My instruction", "kind": "text", "content": "", "enabled": True}
+        history = next((i for i, b in enumerate(blocks) if b.get("slot") == "history"), len(blocks) - 1)
+        index = len(blocks) if after_history else history
+        blocks.insert(index, block)
+        return index
+
+    def preset_begin_edit(index, new, had_copy):
+        """Remembers how things stood before the editor opened, so Cancel can put them back."""
+        runtime.preset_edit = {"index": index, "new": new, "had_copy": had_copy,
+                               "before": None if new else copy.deepcopy(preset_blocks()[index])}
+        renpy.show_screen("preset_edit", index=index)
+        renpy.restart_interaction()
+
+    def preset_open_editor(index):
+        """Opens an instruction for editing. Returns nothing: a value returned by a button's function
+        closes the menu the button is on."""
+        had_copy = bool(persistent.preset)
+        preset_blocks()         # editing works on the player's own copy, so make it if this is the first change
+        preset_begin_edit(index, False, had_copy)
+
+    def preset_add_and_edit(after_history):
+        had_copy = bool(persistent.preset)
+        preset_begin_edit(preset_add(after_history), True, had_copy)
+
+    def preset_cancel_edit():
+        """Leaves the editor as if it had never been opened: an edited instruction gets its old name
+        and wording back, and a newly added one is removed."""
+        edit, blocks = runtime.preset_edit, preset_blocks()
+        ## Close the editor before touching the list: it is drawn once more as it closes, and must
+        ## not go looking for an instruction that has just been removed.
+        renpy.hide_screen("preset_edit")
+        if edit["new"]:
+            del blocks[edit["index"]]
+        else:
+            blocks[edit["index"]].clear()
+            blocks[edit["index"]].update(edit["before"])
+        if not edit["had_copy"]:
+            persistent.preset = None    # nothing else had been changed, so go back to the shipped preset
+        input_fields.clear()
+        renpy.restart_interaction()
+
+    def preset_note(block):
+        """What a built-in part of the prompt is, in the player's terms."""
+        return {
+            "world": _("The card's world and opening situation."),
+            "narrator_instructions": _("The card creator's own guidance to the narrator."),
+            "persona": _("Who you are playing."),
+            "characters": _("The card's cast."),
+            "action_protocol": _("How the game's rules work. Always sent."),
+            "history": _("The story so far. Everything above this line is sent once and then cached; everything below is sent fresh each turn."),
+            "summary": _("The summary of older turns, once there is one."),
+            "lorebook": _("Background facts and memories that have just become relevant."),
+            "state": _("Health, items, places, who is present: the game's current state."),
+            "quests": _("Open quests and their objectives."),
+        }.get(block.get("slot"), block.get("help", ""))
 
     ## The turn.
 
@@ -303,12 +436,22 @@ init python:
             if not narration:
                 raise aig_llm.LLMError("The model returned no story text.")
             if keeper:
-                ## The story model only wrote prose. A second, narrowly focused call reads it and records
-                ## what changed. If that call fails, anything the story model reported by itself is used.
-                try:
-                    world_actions = aig_prompt.parse_bookkeeper(run_helper("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration)))
-                except aig_llm.LLMError:
-                    pass
+                ## The story model only wrote prose. Two narrowly focused helpers read it at the same
+                ## time: the bookkeeper records what changed, and the quest judge alone decides whether
+                ## a quest has moved on. If the bookkeeper fails, anything the story model reported by
+                ## itself is used; if the judge fails, quests simply stay where they are this turn.
+                judged = bool(card.quests)
+                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged))}
+                if judged:
+                    jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration))
+                answers = run_helpers_together(jobs)
+                if not isinstance(answers["books"], Exception):
+                    world_actions = aig_prompt.parse_bookkeeper(answers["books"])
+                if judged:
+                    ## Quests are the judge's alone. Anything else that tries to move one is ignored.
+                    world_actions = [a for a in world_actions if not str(a.get("type", "")).startswith("quest_")]
+                if judged and not isinstance(answers["quests"], Exception):
+                    world_actions = world_actions + aig_prompt.parse_judge(answers["quests"], card)
             results = results + aig_actions.apply_actions(card, state, world_actions)
         except aig_llm.LLMError as e:
             restore_turn(state)
@@ -345,9 +488,9 @@ init python:
             reply = run_helper("direct_scene", aig_prompt.director_prompt(card, state, paragraphs))
         except aig_llm.LLMError:
             reply = ""
-        aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card))
+        aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card, state))
         ## Places the text showed the player go on their map. The narrator hears of it next turn.
-        for place in aig_state.reveal(card, state, aig_prompt.parse_revealed(reply, card)):
+        for place in aig_state.reveal(card, state, aig_prompt.parse_revealed(reply, card, state)):
             state["pending_results"].append({"ok": True, "message": "The map now shows %s." % place})
         direction = aig_prompt.parse_direction(reply, card, len(paragraphs))
         ## Anyone who speaks in the scene is someone the player has now met.
@@ -412,7 +555,7 @@ init python:
         return stage_cache[key]
 
     def stage_background():
-        here = current_card().locations.get(store.game_state["actors"][aig_card.PLAYER]["location"])
+        here = aig_state.places(current_card(), store.game_state).get(store.game_state["actors"][aig_card.PLAYER]["location"])
         return card_image(here["background"]) if here and here.get("background") else None
 
     def stage_cast():
@@ -651,7 +794,8 @@ screen turn_text(turn=None):
             if speaker:
                 text esc(current_card().characters[speaker]["name"]) color speaker_color(speaker) size 26
             text rich(paragraph)
-        for result in (turn["results"] if turn else []):
+        ## A result the engine left to the story (ok is None) is a note for the narrator, not news for the player.
+        for result in [r for r in (turn["results"] if turn else []) if r["ok"] is not None]:
             text esc(result["message"]) size 24 color ("#9fd89f" if result["ok"] else "#ff8080")
         if turn and turn.get("notice"):
             text esc(turn["notice"]) size 24 color "#ffb070"
@@ -761,6 +905,101 @@ screen story_log(turns=HISTORY_MENU_TURNS):
             use turn_text(None)
         for turn in shown:
             use turn_text(turn)
+
+
+## Preset: what the story model is told, as a list of parts that can be switched, edited and reordered.
+
+screen preset():
+    tag menu
+    default show_builtin = False
+
+    use game_menu(_("Preset"), scroll="viewport"):
+        $ blocks = active_preset()["blocks"]
+
+        vbox:
+            spacing 18
+            text _("What the story model is told before it writes. Each line is one instruction: tick it to use it, or edit its wording. Changes are yours, on this device, for every card.") size 24
+
+            hbox:
+                spacing 30
+                vbox:
+                    style_prefix "check"
+                    xsize 700
+                    textbutton _("Also show the built-in parts") action ToggleScreenVariable("show_builtin")
+                if persistent.preset:
+                    textbutton _("Reset to the original") action Confirm(_("Put the preset back as it came? Your own instructions and edits will be removed."), Function(reset_preset)) yalign 0.5
+
+            for index, block in enumerate(blocks):
+                $ builtin = block["kind"] == "slot"
+                $ fixed = block.get("slot") == "action_protocol"
+                if show_builtin or not builtin:
+                    vbox:
+                        spacing 2
+                        hbox:
+                            spacing 18
+                            vbox:
+                                style_prefix "check"
+                                xsize 760
+                                textbutton esc(block["name"]) action Function(preset_toggle, index) selected (fixed or block.get("enabled", True)) sensitive (not fixed)
+                            if not builtin:
+                                textbutton _("Edit") action Function(preset_open_editor, index) text_size 26 yalign 0.5
+                            textbutton _("Up") action Function(preset_move, index, -1) text_size 26 yalign 0.5 sensitive (index > 0)
+                            textbutton _("Down") action Function(preset_move, index, 1) text_size 26 yalign 0.5 sensitive (index < len(blocks) - 1)
+                            if not builtin:
+                                textbutton _("Remove") action Confirm(_("Remove this instruction?"), Function(preset_delete, index)) text_size 26 yalign 0.5
+                        if builtin:
+                            text preset_note(block) size 22 color "#999999"
+                        else:
+                            text esc((block.get("content") or "(empty: press Edit to write it)")) size 22 color ("#cccccc" if block.get("enabled", True) else "#777777")
+                elif block.get("slot") == "history":
+                    text _("- - -  the story so far goes here  - - -") size 22 color "#999999"
+
+            hbox:
+                spacing 40
+                textbutton _("Add an instruction") action Function(preset_add_and_edit, False)
+                textbutton _("Add a reminder after the story") action Function(preset_add_and_edit, True)
+
+            text _("Instructions above the story are sent once and cached, so they cost little. A reminder after the story is sent with every message: it costs a few tokens each turn, but models pay it the most attention. The order matters most among the instructions themselves; the game always sends its changing parts (state, quests, lore) with the newest message.") size 22 color "#999999"
+
+
+## Editing one instruction. It must only read: Ren'Py draws screens ahead of time to have them
+## ready, so anything a screen changed while being drawn would happen without the player asking.
+screen preset_edit(index):
+    modal True
+    zorder 20
+    $ blocks = active_preset()["blocks"]
+    ## Empty if the instruction is gone, so the screen can never fail while closing.
+    $ block = blocks[index] if index < len(blocks) else None
+
+    add "#000000c0"
+    if block is not None:
+        frame:
+            align (0.5, 0.5)
+            xsize 1500
+            ysize 900
+            padding (40, 30)
+
+            vbox:
+                spacing 16
+                label _("Instruction")
+                use settings_input(_("Name"), block, "name")
+                text _("What the story model is told. Write it as a plain instruction. Use {{{{user}} for the player's name. Click the box to type; paste works.") size 22 color "#999999"
+                button:
+                    xfill True
+                    ysize 520
+                    padding (16, 12)
+                    background "#00000080"
+                    action settings_field(block, "content").Toggle()
+                    viewport:
+                        scrollbars "vertical"
+                        mousewheel True
+                        input value settings_field(block, "content") multiline True copypaste True xmaximum 1340
+
+            hbox:
+                align (1.0, 1.0)
+                spacing 40
+                textbutton _("Cancel") action Function(preset_cancel_edit)
+                textbutton _("Done") action Hide("preset_edit")
 
 
 ## Parameters.

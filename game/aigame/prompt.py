@@ -11,7 +11,7 @@ from .actions import shop_price
 from .card import PLAYER
 from .llm import extract_json
 from .text import keep_marks_paired
-from .state import describe_states, effective_stat, get_item, is_away, knows_place, stat_max, xp_needed
+from .state import describe_states, effective_stat, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -21,6 +21,7 @@ HELPER_TASKS = (
     ("summarize", "Summarize old turns"),
     ("direct_scene", "Direct the scene (who speaks, expressions, where characters are)"),
     ("record_changes", "Keep the books (record what each reply changed)"),
+    ("judge_quests", "Judge quest progress"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -34,6 +35,8 @@ def uses(card, need):
         return bool({"map": card.locations, "quests": card.quests, "stats": card.stats}[need])
     if need == "battle":
         return card.battle_system
+    if need == "new_places":
+        return bool(card.locations) and card.data["rules"].get("allow_generated_locations", True)
     if need == "new_items":
         return card.has("inventory") and card.allow_generated_items
     return card.has(need)
@@ -69,12 +72,13 @@ NARRATOR_ACTIONS = (
     ("states", '{"type": "clear_state", "who": WHO, "state": STATE_ID}  the state ends: they wake, break free, come back'),
     ("relationships", '{"type": "change_relationship", "who": CHARACTER_ID, "amount": N}  how that character feels about the player shifts: usually -5 to +5, up to 15 for a moment that truly matters'),
     ("battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  a fight breaks out with these characters. The game then runs the fight itself, blow by blow, so end your reply at the moment it starts: do not narrate blows, damage or who wins'),
-    ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  a character goes somewhere'),
+    ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  someone ends up in another location, by any means: walking, a portal, a carriage, being carried. Any location can be reached this way, not only neighbouring ones. Use one for each person who goes'),
+    ("new_places", '{"type": "create_location", "name": "...", "description": "...", "temporary": false}  the story has taken someone to a place that is not in the location list at all. Create it, then move them there using its name. Set temporary to true for a place that ceases to exist once everyone has left it (a pocket dimension, a dream, a sinking ship)'),
     ("map", '{"type": "reveal_location", "location": LOCATION_ID}  {{user}} learns that one of the places they do not know of exists and how to reach it: someone tells them, they find a map, they notice the door. It then appears on their map'),
     ("map", '{"type": "lock_travel", "reason": "..."}  {{user}} cannot leave this place for now; the game closes the map to them. The reason is one short sentence the player will see'),
     ("map", '{"type": "unlock_travel"}  {{user}} is free to travel again'),
     ("quests", '{"type": "quest_start", "quest": QUEST_ID}'),
-    ("quests", '{"type": "quest_advance", "quest": QUEST_ID}  the current objective was just met'),
+    ("quests", '{"type": "quest_advance", "quest": QUEST_ID, "stage": OBJECTIVE_ID}  the quest\'s current objective, named by its id, is now completely finished: every part of it has happened and is over. Never for an objective that has only begun or is going well'),
     ("quests", '{"type": "quest_fail", "quest": QUEST_ID}'),
 )
 
@@ -132,6 +136,7 @@ A game engine tracks %s. It is the source of truth; the state shown to you is ex
 The player's message may come with engine results for things they tried to do. Treat them as fact:
 - "done" happened. Narrate it.
 - "REJECTED" did not happen. Narrate the attempt failing for the stated reason, in the story's voice (reaching for a pouch that is empty, a door that will not open). Never narrate a rejected action as succeeding.
+- "UP TO YOU" is something the engine left to the story, such as setting off for a place that is not next door. Decide what happens and narrate it: they may arrive by whatever means the story offers, be delayed on the way, or be unable to go.
 Never describe {{user}} gaining, losing or using something the engine tracks unless a result or the state says so.
 """ % tracked
     if record:
@@ -159,20 +164,21 @@ A result saying {{user}} left one place for another means they walked out of the
 
 # The bookkeeper: a helper that turns the narrator's prose into recorded changes.
 
-def bookkeeper_prompt(card, state, player_text, results, narration):
-    """state is the game as it stands after the player's own actions were applied."""
-    lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need)]
+def bookkeeper_prompt(card, state, player_text, results, narration, quests=True):
+    """state is the game as it stands after the player's own actions were applied. quests is False
+    when a separate quest judge is deciding quest progress, so the bookkeeper leaves quests alone."""
+    lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need) and (quests or need != "quests")]
     checks = []
     if uses(card, "stats"):
         checks.append("- Costs and harm. If someone casts magic, uses an ability or exerts themselves and no result above already charged for it, lower the stat that fuels it (about 1 to 3 for something small, 4 to 6 for something solid, 8 or more for something great). If someone is hurt or healed, change the stat that measures it by a fitting amount.")
     if uses(card, "states"):
         checks.append("- States. For every state the game state lists on anyone, decide whether it still holds at the end of the text and clear_state the ones that ended (they landed, woke, got free, came back). set_state the ones that began.")
     if uses(card, "map"):
-        checks.append("- Places. If the player ends the text somewhere other than the Location in the game state, move them there, including back to where they were if they were stopped from leaving. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
+        checks.append("- Places. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
     if uses(card, "inventory") or uses(card, "money"):
         checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received.")
-    if uses(card, "quests"):
-        checks.append("- Quests. An objective whose \"Met when\" has now happened is advanced; a quest whose \"Fails if\" has happened is failed; a quest the text gives the player is started.")
+    if uses(card, "quests") and quests:
+        checks.append("- Quests. Advance a quest only when its current objective is completely finished, every part of it; one that has begun or is going well is not finished. A quest whose \"Fails if\" has happened is failed; a quest the text gives the player is started.")
     if uses(card, "levels"):
         checks.append("- Experience, when the player has just achieved something.")
     if uses(card, "relationships"):
@@ -196,9 +202,66 @@ Rules:
 
 Reply with JSON only: {"actions": [ ... ]}""" % ("\n".join(lines), "\n".join(checks), states_reference(card, record=False).replace("{{user}}", "the player"))
     already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
-    user = "%s\n\n%s\n\n[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
-        describe_state(card, state), describe_quests(card, state), player_text, already, narration)
+    earlier = "\n\n".join(t["narration"][-600:] for t in state["history"][-2:])
+    user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
+        describe_state(card, state), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
+        "[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else "", player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
+
+
+# The quest judge: a helper whose only job is to decide whether quests have moved on.
+
+def judge_prompt(card, state, player_text, narration, turns=5):
+    system = """\
+You are the quest judge of a text adventure. Decide, strictly, whether each quest in progress has moved on. You are given every such quest's current objective and the recent story, ending with the newest text.
+
+Give one verdict for each quest in progress:
+- "done": the current objective is completely finished in the story. Every part of it has happened and is over. If it has several parts (several tests, several rooms, several opponents), all of them are over. If it gives a "Finished only when", that has plainly happened.
+- "failed": only if the quest gives a "Fails if" and that has happened, or the story has made the quest impossible.
+- "not_yet": everything else, including an objective that has started, is going well, or is nearly over. This is the usual answer.
+
+When unsure, answer not_yet. Nothing is lost by moving on a turn later; moving on early skips part of the story.
+Judge only each quest's current objective, the one named with it. Later objectives do not exist for you.
+
+Under "start", list any quest from "Not started" that the newest text has clearly given to the player or set in motion. Otherwise leave it empty.
+
+Reply with JSON only. Give the reason before the verdict:
+{"verdicts": [{"quest": "quest_id", "objective": "objective_id", "why": "one short sentence", "verdict": "not_yet"}], "start": []}"""
+    active, waiting = [], []
+    for quest in card.data.get("quests", []):
+        progress = state["quests"].get(quest["id"])
+        if progress is None:
+            waiting.append("- %s: %s" % (_named(quest, "title"), quest.get("description", "")))
+        elif progress["status"] == "active":
+            stage = quest["stages"][progress["stage"]]
+            entry = "- %s. Current objective [%s], part %d of %d: %s" % (
+                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
+            entry += "\n  Finished only when: %s" % (stage.get("done_when") or "everything the objective describes has happened and is over")
+            if quest.get("fail_when"):
+                entry += "\n  Fails if: %s" % quest["fail_when"]
+            active.append(entry)
+    story = ["Player: %s\nNarrator: %s" % (t["player"], t["narration"][-1500:]) for t in state["history"][-turns:]]
+    user = "[Quests in progress]\n%s\n\n[Not started]\n%s\n\n[Recent story, oldest first]\n%s\n\n[Newest]\nPlayer: %s\nNarrator: %s" % (
+        "\n".join(active) or "(none)", "\n".join(waiting) or "(none)", "\n\n".join(story) or "(the story has only just begun)", player_text, narration)
+    return system, [{"role": "user", "content": fill(card, state, user)}]
+
+
+def parse_judge(text, card):
+    """The judge's verdicts as actions. Each names the objective it judged, which the engine checks
+    against the quest's real current objective, so a verdict about the wrong one changes nothing."""
+    parsed = extract_json(text) or {}
+    actions = []
+    for verdict in parsed.get("verdicts") if isinstance(parsed.get("verdicts"), list) else []:
+        if not isinstance(verdict, dict) or verdict.get("quest") not in card.quests:
+            continue
+        if verdict.get("verdict") == "done" and isinstance(verdict.get("objective"), str):
+            actions.append({"type": "quest_advance", "quest": verdict["quest"], "stage": verdict["objective"]})
+        elif verdict.get("verdict") == "failed":
+            actions.append({"type": "quest_fail", "quest": verdict["quest"]})
+    for quest in parsed.get("start") if isinstance(parsed.get("start"), list) else []:
+        if quest in card.quests:
+            actions.append({"type": "quest_start", "quest": quest})
+    return actions
 
 
 def parse_bookkeeper(text):
@@ -260,11 +323,11 @@ def _stats(card, state, who):
     return ", ".join(parts)
 
 
-def _exits(card, location_id):
-    here = card.locations.get(location_id)
+def _exits(card, state, location_id):
+    here = places(card, state).get(location_id)
     if not here:
         return []
-    return [l for l in card.data.get("locations", [])
+    return [l for l in place_list(card, state)
             if l["id"] != here["id"] and (l["id"] in here.get("connections", []) or here["id"] in l.get("connections", []))]
 
 
@@ -301,19 +364,24 @@ def _sheet(card, state, who):
 
 
 def _unknown_places(card, state):
-    return [l for l in card.data.get("locations", []) if not knows_place(state, l["id"])]
+    return [l for l in place_list(card, state) if not knows_place(state, l["id"])]
 
 
 def describe_state(card, state, secrets=True):
     """secrets is False for helpers that speak for the player (their suggested replies, reading
     their intent), which must not be told about places the player has not discovered."""
     me = state["actors"][PLAYER]
-    here = card.locations.get(me["location"])
+    here = places(card, state).get(me["location"])
     lines = ["[Current game state]", "Player: %s (player)" % me["name"]]
     if here:
         exits = [_named(l) + ("" if knows_place(state, l["id"]) else " [the player does not know of it yet]")
-                 for l in _exits(card, here["id"]) if secrets or knows_place(state, l["id"])]
-        lines.append("Location: %s. Exits: %s" % (_named(here), ", ".join(exits) or "none"))
+                 for l in _exits(card, state, here["id"]) if secrets or knows_place(state, l["id"])]
+        lines.append("Location: %s%s. Exits on foot: %s" % (_named(here), " [made by the story; temporary]" if here.get("temporary") else "", ", ".join(exits) or "none"))
+        ## Named with their ids so that whoever records a journey, a portal or a forced move can say where it went.
+        near = set(l["id"] for l in _exits(card, state, here["id"]))
+        further = [_named(l) for l in place_list(card, state) if l["id"] != here["id"] and l["id"] not in near and knows_place(state, l["id"])]
+        if further:
+            lines.append("Other places on the map, not reachable on foot from here: %s" % ", ".join(further))
     if secrets and _unknown_places(card, state):
         lines.append("Places the player does not know of yet (not on their map; reveal one with reveal_location when the story shows it to them): %s" % "; ".join(
             "%s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state)))
@@ -331,7 +399,7 @@ def describe_state(card, state, secrets=True):
         elif is_away(card, actor):
             elsewhere.append("%s (%s) is away: %s" % (actor["name"], who, describe_states(actor)))
         else:
-            place = card.locations.get(actor["location"])
+            place = places(card, state).get(actor["location"])
             elsewhere.append("%s (%s) at %s%s" % (actor["name"], who, _named(place) if place else "an unknown place", doing))
     if present:
         lines += ["Characters here:"] + present
@@ -353,7 +421,14 @@ def describe_state(card, state, secrets=True):
     return "\n".join(lines)
 
 
-def describe_quests(card, state):
+def stage_guidance(stage):
+    """How the narrator should play an objective. "hint" is the older name for the same thing."""
+    return stage.get("guidance") or stage.get("hint") or ""
+
+
+def describe_quests(card, state, detail="narrator"):
+    """detail "narrator" includes how to play each objective and when it is over. "player" gives
+    only what the player can see in their quest log, for helpers that speak for the player."""
     active, available = [], []
     for quest in card.data.get("quests", []):
         progress = state["quests"].get(quest["id"])
@@ -361,13 +436,20 @@ def describe_quests(card, state):
             available.append("- %s: %s" % (_named(quest, "title"), quest.get("description", "")))
         elif progress["status"] == "active":
             stage = quest["stages"][progress["stage"]]
-            active.append("- %s. Current objective: %s%s%s" % (
-                _named(quest, "title"), stage["description"], " (Met when: %s)" % stage["hint"] if stage.get("hint") else "",
-                " (Fails if: %s)" % quest["fail_when"] if quest.get("fail_when") else ""))
+            line = "- %s. Current objective [%s], part %d of %d: %s" % (
+                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
+            if detail == "narrator":
+                if stage_guidance(stage):
+                    line += "\n  How to play it: %s" % stage_guidance(stage)
+                if stage.get("done_when"):
+                    line += "\n  It is finished only when: %s" % stage["done_when"]
+                if quest.get("fail_when"):
+                    line += "\n  Fails if: %s" % quest["fail_when"]
+            active.append(line)
     lines = []
     if active:
         lines += ["[Active quests]"] + active
-    if available:
+    if available and detail == "narrator":
         lines += ["[Quests not started yet]"] + available
     return "\n".join(lines)
 
@@ -402,7 +484,8 @@ def _recent_text(card, state, player_text, turns=3):
 
 
 def _results_text(results):
-    return "\n".join("- %s: %s" % ("done" if r["ok"] else "REJECTED", r["message"]) for r in results)
+    kinds = {True: "done", False: "REJECTED", None: "UP TO YOU"}
+    return "\n".join("- %s: %s" % (kinds[r["ok"]], r["message"]) for r in results)
 
 
 def _turn_message(player_text, results):
@@ -534,7 +617,7 @@ def suggest_prompt(card, state, count):
 You suggest what the player could do next in a text adventure. Give %d short, distinct options, written in first person as the player ("I ask Mira about the cellar."). Mix talking, acting and exploring. Only suggest using or buying things the game state shows are available. One sentence each.
 
 Reply with JSON only: {"choices": ["...", "..."]}""" % count
-    user = "%s\n\n%s\n\n[Last narration]\n%s" % (describe_state(card, state, secrets=False), describe_quests(card, state), last_narration(card, state))
+    user = "%s\n\n%s\n\n[Last narration]\n%s" % (describe_state(card, state, secrets=False), describe_quests(card, state, "player"), last_narration(card, state))
     return system, [{"role": "user", "content": user}]
 
 
@@ -564,7 +647,7 @@ def expressions_of(card, char_id):
 
 def _whereabouts(card, state, who):
     me, actor = state["actors"][PLAYER], state["actors"][who]
-    place = card.locations.get(actor["location"])
+    place = places(card, state).get(actor["location"])
     if is_away(card, actor):
         where = "away"
     elif actor["location"] is not None and actor["location"] == me["location"]:
@@ -596,13 +679,13 @@ Reply with JSON only:
     me = state["actors"][PLAYER]
     cast = "\n".join("- %s (id: %s). Expressions: %s. Before this text: %s" % (
         c["name"], c["id"], ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
-    here = card.locations.get(me["location"])
-    places = "\n[Locations]\nThe player is at %s.\n%s\n" % (_named(here), ", ".join(_named(l) for l in card.data.get("locations", []))) if here else ""
+    here = places(card, state).get(me["location"])
+    listing = "\n[Locations]\nThe player is at %s.\n%s\n" % (_named(here), ", ".join(_named(l) for l in place_list(card, state))) if here else ""
     if _unknown_places(card, state):
-        places += "\n[Places the player does not know of yet]\n%s\n" % "\n".join(
+        listing += "\n[Places the player does not know of yet]\n%s\n" % "\n".join(
             "- %s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state))
     numbered = "\n\n".join("%d. %s" % (n + 1, p) for n, p in enumerate(paragraphs))
-    return system, [{"role": "user", "content": "[Characters]\n%s\n%s\n[Paragraphs]\n%s" % (cast, places, numbered)}]
+    return system, [{"role": "user", "content": "[Characters]\n%s\n%s\n[Paragraphs]\n%s" % (cast, listing, numbered)}]
 
 
 def parse_direction(text, card, count):
@@ -622,22 +705,24 @@ def parse_direction(text, card, count):
     return direction
 
 
-def parse_revealed(text, card):
+def parse_revealed(text, card, state=None):
     """Location ids the director says the text revealed. Anything that is not a real location is dropped."""
     parsed = extract_json(text) or {}
-    return [l for l in parsed.get("revealed") if isinstance(l, str) and l in card.locations] if isinstance(parsed.get("revealed"), list) else []
+    known = places(card, state) if state else card.locations
+    return [l for l in parsed.get("revealed") if isinstance(l, str) and l in known] if isinstance(parsed.get("revealed"), list) else []
 
 
-def parse_whereabouts(text, card):
+def parse_whereabouts(text, card, state=None):
     """What the director said about where characters are, ready for state.track. Unknown characters are
     dropped; a location that is neither "here", a real place nor null is ignored and only the note kept."""
     parsed = extract_json(text) or {}
+    known = places(card, state) if state else card.locations
     updates = []
     for entry in parsed.get("whereabouts") if isinstance(parsed.get("whereabouts"), list) else []:
         if not isinstance(entry, dict) or entry.get("id") not in card.characters:
             continue
         update = {"id": entry["id"]}
-        if "location" in entry and (entry["location"] is None or entry["location"] == "here" or entry["location"] in card.locations):
+        if "location" in entry and (entry["location"] is None or entry["location"] == "here" or entry["location"] in known):
             update["location"] = entry["location"]
         if isinstance(entry.get("note"), str):
             update["note"] = entry["note"].strip()[:120]

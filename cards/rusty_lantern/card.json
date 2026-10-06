@@ -362,17 +362,17 @@
         {
           "id": "ask_around",
           "description": "Find out what happened to the courier.",
-          "hint": "Completes when the player learns the horse came back riderless, from Tobin or by seeing the mare."
+          "done_when": "the player learns the horse came back riderless, from Tobin or by seeing the mare."
         },
         {
           "id": "find_letter",
           "description": "Find what the courier was carrying.",
-          "hint": "Completes when the player holds the sealed letter."
+          "done_when": "the player holds the sealed letter."
         },
         {
           "id": "deliver",
           "description": "Decide what to do with the letter.",
-          "hint": "Completes when the letter is given to Mira or opened."
+          "done_when": "the letter is given to Mira or opened."
         }
       ],
       "rewards": {

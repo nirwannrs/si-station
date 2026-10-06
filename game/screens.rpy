@@ -316,6 +316,8 @@ screen navigation():
 
         textbutton _("Parameters") action ShowMenu("parameters")
 
+        textbutton _("Preset") action ShowMenu("preset")
+
         textbutton _("Card info") action ShowMenu("card_info")
 
         if _in_replay:

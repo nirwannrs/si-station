@@ -239,11 +239,25 @@ class EngineTest(unittest.TestCase):
 
     # movement and quests
 
-    def test_move_follows_connections(self):
+    def test_the_player_walks_only_to_neighbouring_places(self):
+        by_choice = lambda **action: apply_action(self.card, self.state, action, by_player=True)
+        self.assertTrue(by_choice(type="move", location="stable")["ok"])
+        before = copy.deepcopy(self.state)
+        far = by_choice(type="move", location="cellar")                          # the cellar is not next to the stable
+        self.assertIsNone(far["ok"])                                             # neither done nor refused
+        self.assertIn("for the story to decide", far["message"])
+        self.assertEqual(self.state, before)
+        self.assertFalse(by_choice(type="move", location="stable")["ok"])        # already there
+        self.assertTrue(by_choice(type="move", location="common_room")["ok"])
+
+    def test_the_story_can_take_anyone_anywhere(self):
         self.ok(type="move", location="stable")
-        self.assertIn("cannot get to", self.rejected(type="move", location="cellar"))
-        self.rejected(type="move", location="stable")
-        self.ok(type="move", location="common_room")
+        self.assertEqual(self.ok(type="move", location="cellar"), "Traveler leaves Stable and goes to Cellar.")     # a portal, say
+        self.ok(type="move", who="tobin", location="cellar")
+        self.ok(type="move", who="marsh_bandit", location="cellar")              # someone who was off the map
+        self.assertEqual(set(a["location"] for w, a in self.state["actors"].items() if w != "mira"), {"cellar"})
+        self.rejected(type="move", who="tobin", location="cellar")               # already there
+        self.rejected(type="move", location="atlantis")                          # still has to be a real place
 
     def test_quest_advances_then_completes_with_rewards(self):
         self.rejected(type="quest_start", quest="missing_courier")

@@ -11,7 +11,7 @@ import random
 
 from .actions import apply_action, _change_stat
 from .card import PLAYER
-from .state import blocked, effective_stat, is_away
+from .state import blocked, effective_stat, is_away, places
 
 _rng = random.Random()
 
@@ -119,7 +119,7 @@ def take_turn(card, state, action, rng=_rng):
         else:
             health = card.stats[card.battle["health_stat"]]
             player["stats"][health["id"]] = max(1, defeat.get("health", 1))
-            where = card.locations.get(defeat.get("location"))
+            where = places(card, state).get(defeat.get("location"))
             if where:
                 player["location"] = where["id"]
             results.append(_result(True, "%s is beaten and left for dead, and comes round later%s with %s %s." % (

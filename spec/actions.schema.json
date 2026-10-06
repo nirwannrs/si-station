@@ -223,6 +223,19 @@
             }
           },
           {
+            "description": "Narrator only. Only valid when rules.allow_generated_locations is true. Adds a place the card does not define, on the player's map, to be moved to by its name. A temporary place is removed once nobody is in it.",
+            "type": "object",
+            "required": ["type", "name"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "create_location" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "temporary": { "type": "boolean", "default": false },
+              "connected_to": { "$ref": "#/$defs/id", "description": "A location it can be walked to and from. Omit for a place only the story can take people to." }
+            }
+          },
+          {
             "description": "Narrator only. Puts a location the card marked hidden on the player's map.",
             "type": "object",
             "required": ["type", "location"],

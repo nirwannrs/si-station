@@ -6,7 +6,7 @@ plain factual sentences because they are fed back to the narrator.
 """
 
 from .card import PLAYER, SLOTS
-from .state import knows_place, reveal
+from .state import knows_place, left_place, places, reveal
 from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
@@ -32,7 +32,24 @@ class Rejected(Exception):
 
 
 def apply_actions(card, state, actions, by_player=False):
-    return [apply_action(card, state, a, by_player) for a in actions]
+    """Applies a list of actions from one source in one turn.
+
+    A quest moves on by at most one objective per list. A model that decides a quest is finished
+    tends to say so once for every objective left; only the first is real.
+    """
+    results, moved_on = [], set()
+    for action in actions:
+        if isinstance(action, dict) and action.get("type") == "quest_advance":
+            quest = str(action.get("quest")).strip().lower()
+            if quest in moved_on:
+                continue
+            result = apply_action(card, state, action, by_player)
+            if result["ok"]:
+                moved_on.add(quest)
+            results.append(result)
+        else:
+            results.append(apply_action(card, state, action, by_player))
+    return results
 
 
 def apply_action(card, state, action, by_player=False):
@@ -54,12 +71,20 @@ def apply_action(card, state, action, by_player=False):
         return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])}
     if by_player and action["type"] == "move":
         try:
-            wanted = _find(card.locations, action.get("location"), "location")[0]
+            wanted = _find(places(card, state), action.get("location"), "location")[0]
         except Rejected:
             wanted = None
         if wanted is not None and not knows_place(state, wanted):
             # Worded so as not to confirm the place exists.
             return {"action": action, "ok": False, "message": "%s does not know of any such place to go to." % state["actors"][PLAYER]["name"]}
+        player = state["actors"][PLAYER]
+        here = places(card, state).get(player["location"])
+        if wanted is not None and here and wanted != here["id"] and not _connected(here, places(card, state)[wanted]):
+            # The map only says where the player can walk by themselves. Somewhere further off may
+            # still be reachable by a portal, a carriage or a week on the road, and that is the
+            # story's call, not the engine's. So this is neither applied nor refused: ok is None.
+            return {"action": action, "ok": None, "message": "%s wants to go to %s, which is not next to %s. Whether and how they get there is for the story to decide." % (
+                player["name"], places(card, state)[wanted]["name"], here["name"])}
     feature = REQUIRES.get(action["type"])
     if feature and not card.has(feature):
         return {"action": action, "ok": False, "message": "This game does not use %s." % feature}
@@ -321,16 +346,22 @@ def _change_stat_action(card, state, a):
     return "%s: %s." % (who["name"], _change_stat(card, state, wid, sid, _amount(a)))
 
 
+def _connected(a, b):
+    return b["id"] in a.get("connections", []) or a["id"] in b.get("connections", [])
+
+
 def _move(card, state, a):
+    """Puts someone in a location. Connections are not checked here: this is the story moving
+    people, and the story can take anyone anywhere (a portal, a journey, an arrest). The limit to
+    neighbouring places applies only to where the player may go by their own choice, above."""
     wid, who = _who(state, a)
-    lid, location = _find(card.locations, a.get("location"), "location")
-    here = card.locations.get(who["location"])
-    if here:
-        if lid == here["id"]:
-            raise Rejected("%s is already at %s." % (who["name"], location["name"]))
-        if lid not in here.get("connections", []) and here["id"] not in location.get("connections", []):
-            raise Rejected("%s cannot get to %s directly from %s." % (who["name"], location["name"], here["name"]))
+    lid, location = _find(places(card, state), a.get("location"), "location")
+    here = places(card, state).get(who["location"])
+    if here and lid == here["id"]:
+        raise Rejected("%s is already at %s." % (who["name"], location["name"]))
     who["location"] = lid
+    if here:
+        left_place(state, here["id"])
     if wid == PLAYER:
         reveal(card, state, [lid])      # being taken somewhere puts it on the map
     if here:
@@ -357,6 +388,10 @@ def _active_quest(card, state, a):
 
 def _quest_advance(card, state, a):
     quest, progress = _active_quest(card, state, a)
+    current = quest["stages"][progress["stage"]]
+    if a.get("stage") is not None and a["stage"] != current["id"]:
+        # Naming the objective proves the model is talking about the one in progress, not one it expects later.
+        raise Rejected("Quest %s is not on that objective. Its current objective is %s." % (quest["title"], current["id"]))
     progress["stage"] += 1
     if progress["stage"] < len(quest["stages"]):
         return "Quest %s: new objective: %s" % (quest["title"], quest["stages"][progress["stage"]]["description"])
@@ -482,8 +517,37 @@ def _clear_state(card, state, a):
     return "%s is no longer %s." % (who["name"], name.lower())
 
 
+def _create_location(card, state, a):
+    """A place the story needs that the card never defined: a pocket dimension, a roadside camp,
+    wherever the demon god threw everyone. It has no connections unless one is named, so the only
+    way in or out is the way the story provides."""
+    if not card.data["rules"].get("allow_generated_locations", True):
+        raise Rejected("This game's map is fixed; the story cannot add places to it.")
+    name = a.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 60:
+        raise Rejected("A new place needs a short name.")
+    name = name.strip()
+    try:
+        lid, existing = _find(places(card, state), name, "location")
+        reveal(card, state, [lid])
+        return "%s is already a place on the map." % existing["name"]
+    except Rejected:
+        pass
+    base = "gen_" + ("".join(c if c.isalnum() else "_" for c in name.lower()).strip("_") or "place")
+    lid, n = base, 2
+    while lid in places(card, state):
+        lid, n = "%s_%d" % (base, n), n + 1
+    place = {"id": lid, "name": name, "description": str(a.get("description") or "")[:400], "connections": [],
+             "generated": True, "temporary": a.get("temporary") is True}
+    if a.get("connected_to") is not None:
+        place["connections"] = [_find(places(card, state), a["connected_to"], "location")[0]]
+    state.setdefault("generated_locations", {})[lid] = place
+    reveal(card, state, [lid])
+    return "A new place: %s%s." % (name, ", for as long as someone is there" if place["temporary"] else "")
+
+
 def _reveal_location(card, state, a):
-    lid, location = _find(card.locations, a.get("location"), "location")
+    lid, location = _find(places(card, state), a.get("location"), "location")
     if not reveal(card, state, [lid]):
         raise Rejected("%s is already on the map." % location["name"])
     return "The map now shows %s." % location["name"]
@@ -550,6 +614,7 @@ _HANDLERS = {
     "unlock_skill": _unlock_skill,
     "change_relationship": _change_relationship,
     "start_battle": _start_battle,
+    "create_location": _create_location,
     "reveal_location": _reveal_location,
     "lock_travel": _lock_travel,
     "unlock_travel": _unlock_travel,

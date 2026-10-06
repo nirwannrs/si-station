@@ -458,6 +458,7 @@ const SECTIONS = [
     ] },
     { t: "group", k: "rules", label: "Details", fields: [
       { t: "text", k: "currency_name", label: "What money is called", placeholder: "Gold", when: () => has("money") },
+      { t: "bool", k: "allow_generated_locations", label: "The story may create new places", help: "Somewhere the card does not define, such as a pocket dimension or wherever a villain throws everyone. Off means the map is fixed to your locations.", default: true, redraw: false, when: () => (card.locations || []).length },
       { t: "bool", k: "allow_generated_items", label: "The AI may invent new items", help: "They are plain items with no effects. Off means only the items you define exist.", default: true, redraw: false, when: () => has("inventory") },
       { t: "text", k: "relationship_name", label: "What the relationship value is called", placeholder: "Affection", redraw: true, when: () => has("relationships") },
       { t: "group", k: "leveling", label: "Levelling", when: () => has("levels"), fields: [
@@ -590,7 +591,8 @@ const SECTIONS = [
       { t: "list", k: "stages", label: "Objectives, in order", keep: true, add: "Add an objective", make: () => ({ id: "", description: "" }), title: (s) => s.description, sub: (s) => s.id, fields: [
         { t: "text", k: "description", label: "What the player sees", feeds: "id" },
         { t: "text", k: "id", label: "Id" },
-        { t: "area", k: "hint", label: "When it counts as done", rows: 2, help: "Only the AI sees this." },
+        { t: "area", k: "done_when", label: "It is finished only when", rows: 2, help: "What must have happened for this objective to count as done. Be exact: \"all four tests are over\", not \"the tests\". Leave empty and the game requires everything in the description to be over. Only the AI sees this." },
+        { t: "area", k: "guidance", label: "How to play this part", rows: 3, help: "Direction for the narrator: who appears, what should happen, what to keep secret. It does not decide when the objective is over. Only the AI sees this." },
       ] },
       { t: "group", k: "rewards", label: "Reward for finishing", fields: [
         { t: "number", k: "money", label: card.rules.currency_name || "Gold", when: () => has("money") },
@@ -706,6 +708,13 @@ async function openEditor(project, wanted) {
     pid = project; card = reply.card; problems = reply.problems;
     card.meta = card.meta || {}; card.world = card.world || {}; card.rules = card.rules || {}; card.rules.stats = card.rules.stats || []; card.characters = card.characters || [];
     openItems.clear();
+    // "hint" used to hold both direction for the narrator and the finishing condition. It is now
+    // called guidance, with the condition in its own field.
+    let renamed = false;
+    for (const quest of card.quests || []) for (const stage of quest.stages || []) {
+      if (stage.hint !== undefined) { if (!stage.guidance) stage.guidance = stage.hint; delete stage.hint; renamed = true; }
+    }
+    if (renamed) setTimeout(() => changed(false), 0);
     // Repairs a card saved before stat references were kept in step.
     const repaired = JSON.stringify(card);
     dropMissingStats();

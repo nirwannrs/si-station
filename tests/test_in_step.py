@@ -96,5 +96,30 @@ class InStepTest(unittest.TestCase):
         self.assertEqual(mcp_server.Tools(None).card_format({})["schema"], CARD_SCHEMA)      # served from the file, never a copy
 
 
+class ButtonFunctionsTest(unittest.TestCase):
+    def test_functions_run_by_buttons_return_nothing(self):
+        """In Ren'Py, when a button runs Function(f) and f returns a value, that value closes the
+        screen or menu the button is on. Twice that has thrown the player out of a screen. Every
+        function a button runs must end without returning anything, unless closing is the point."""
+        closing_is_the_point = {
+            "go_to",                # travelling ends the input screen so the move is played as a turn
+            "import_from_file",     # choosing a card ends the insert-card screen
+        }
+        sources = dict((name, read("game", name)) for name in os.listdir(os.path.join(ROOT, "game")) if name.endswith(".rpy"))
+        everything = "\n".join(sources.values())
+        used = set(re.findall(r"Function\(([a-z_]+)[,)]", everything))
+        self.assertGreater(len(used), 10)
+        offenders = []
+        for name in sorted(used - closing_is_the_point):
+            found = re.search(r"^(    )def %s\(.*?\):\n((?:(?:        .*)?\n)+)" % name, everything, re.M)
+            if not found:
+                continue                                    # a Ren'Py built-in such as renpy.full_restart
+            body = re.sub(r"^        def .*?(?=^        \S)", "", found.group(2), flags=re.M | re.S)   # ignore helpers nested inside it
+            for line in body.splitlines():
+                if re.match(r"\s+return\s+\S", line) and not re.match(r"\s+return (None|set_status\()", line):
+                    offenders.append("%s: %s" % (name, line.strip()))
+        self.assertEqual(offenders, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,7 +42,7 @@ class ToolError(Exception):
 
 
 # Paths into a card: names separated by dots, list entries picked by id or position in brackets.
-#   meta.title    rules.features.skills    characters[mira].personality    quests[missing_courier].stages[0].hint
+#   meta.title    rules.features.skills    characters[mira].personality    quests[missing_courier].stages[0].done_when
 
 _TOKEN = re.compile(r"([A-Za-z0-9_]+)|\[([^\]]+)\]")
 

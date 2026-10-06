@@ -119,7 +119,7 @@ class PromptTest(unittest.TestCase):
         results = [{"ok": False, "message": "Ash does not have Bowl of Stew."}]
         system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I eat the stew and ask about the cellar.", results)
         self.assertIn("You are the narrator", system)
-        self.assertIn("Never decide Ash's actions", system)       # {{user}} filled in
+        self.assertIn("voice every character except Ash", system)  # {{user}} filled in
         self.assertIn("Write in second person", system)            # enabled toggle
         self.assertNotIn("one or two short paragraphs", system)    # disabled toggle
         self.assertIn("Low fantasy", system)
@@ -130,13 +130,29 @@ class PromptTest(unittest.TestCase):
         self.assertEqual([bool(m.get("cache")) for m in messages], [False, False, False, True, False])
         self.assertIn("Rain follows you", messages[1]["content"])
         last = messages[-1]["content"]
-        for part in ["[Current game state]", "[Active quests]", "Met when:", "I eat the stew", "- REJECTED: Ash does not have Bowl of Stew.",
+        for part in ["[Current game state]", "[Active quests]", "It is finished only when:", "I eat the stew", "- REJECTED: Ash does not have Bowl of Stew.",
                      "smuggler's cache"]:                           # lorebook entry triggered by "cellar"
             self.assertIn(part, last)
         self.assertNotIn("the lights", system + last)              # untriggered entry stays out
         for changing in ["[Current game state]", "[Active quests]", "[Background knowledge]"]:
             self.assertNotIn(changing, system)
         self.assertNotIn("{{user}}", system + last)
+
+    def test_default_preset_keeps_the_narrator_off_the_players_character(self):
+        self.state["history"].append({"player": "I look around.", "results": [], "narration": "You see a bar."})
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I sit down.", [])
+        self.assertIn("Ash belongs to the player alone", system)
+        self.assertIn("stop at the first point where Ash would have to act", system)
+        last = messages[-1]["content"]
+        self.assertIn("Do not act, speak or decide for Ash", last)
+        self.assertTrue(last.index("Do not act, speak or decide for Ash") < last.index("I sit down."))      # the nudge sits right before the player's message
+        self.assertTrue(last.index("[Current game state]") < last.index("(Reminder:"))
+        for block in self.preset["blocks"]:
+            if block["id"] in ("player_agency", "turn_reminder"):
+                block["enabled"] = False
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I sit down.", [])
+        self.assertNotIn("belongs to the player alone", system)
+        self.assertNotIn("(Reminder:", messages[-1]["content"])
 
     def test_placeholders_are_filled(self):
         self.assertEqual(prompt.fill(self.card, self.state, "{{user}} owes {{user}}'s host 5 {{currency}}."), "Ash owes Ash's host 5 Gold.")
@@ -301,7 +317,7 @@ class LeavingTest(unittest.TestCase):
         card.quests["missing_courier"]["fail_when"] = "the player leaves the inn for good"
         results = apply_actions(card, state, [{"type": "move", "location": "stable"}], by_player=True)
         self.assertEqual(results[0]["message"], "Traveler leaves Common Room and goes to Stable.")
-        self.assertIn("(Fails if: the player leaves the inn for good)", prompt.describe_quests(card, state))
+        self.assertIn("Fails if: the player leaves the inn for good", prompt.describe_quests(card, state))
         protocol = prompt.action_protocol(card)
         for part in ["[When {{user}} leaves a place]", "put them back with a move action", "quest_fail"]:
             self.assertIn(part, protocol)
@@ -309,6 +325,20 @@ class LeavingTest(unittest.TestCase):
         back = apply_actions(card, state, prompt.parse_narration('A hand lands on your shoulder.\n<actions>{"actions": [{"type": "move", "who": "player", "location": "common_room"}]}</actions>')[1])
         self.assertTrue(back[0]["ok"])
         self.assertEqual(state["actors"]["player"]["location"], "common_room")
+
+    def test_far_travel_is_handed_to_the_story(self):
+        card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(card)
+        apply_actions(card, state, [{"type": "move", "location": "stable"}], by_player=True)
+        results = apply_actions(card, state, [{"type": "move", "location": "cellar"}], by_player=True)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            preset = json.load(f)
+        system, messages = prompt.narrator_prompt(card, state, preset, "I step through the portal to the cellar.", results, record=False)
+        self.assertIn("- UP TO YOU: Traveler wants to go to Cellar, which is not next to Stable.", messages[-1]["content"])
+        self.assertIn('"UP TO YOU" is something the engine left to the story', system)
+        keeper = prompt.bookkeeper_prompt(card, state, "I step through the portal.", results, "The portal closes behind you in the cellar.")[0]
+        self.assertIn("however they got there and however far it is", keeper)
+        self.assertIn("Any location can be reached this way", keeper)
 
     def test_narrator_can_close_the_map(self):
         card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
@@ -667,6 +697,152 @@ class BookkeeperTest(unittest.TestCase):
         self.assertIn("Relationships", system)
         for absent in ["Costs and harm", "Belongings", "Experience", "Fights", "change_money", "add_item"]:
             self.assertNotIn(absent, system, absent)
+
+
+class QuestJudgeTest(unittest.TestCase):
+    def setUp(self):
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        self.quest = self.state["quests"]["missing_courier"]
+
+    def test_a_quest_moves_one_objective_at_a_time(self):
+        thrice = [{"type": "quest_advance", "quest": "missing_courier"}] * 3
+        results = apply_actions(self.card, self.state, thrice)
+        self.assertEqual(len(results), 1)                                   # the repeats are dropped, not shown as errors
+        self.assertEqual(self.quest, {"status": "active", "stage": 1})
+        apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "Missing_Courier"}, {"type": "quest_advance", "quest": "missing_courier"}])
+        self.assertEqual(self.quest["stage"], 2)
+
+    def test_the_objective_named_must_be_the_one_in_progress(self):
+        wrong = apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "missing_courier", "stage": "deliver"}])[0]
+        self.assertFalse(wrong["ok"])
+        self.assertIn("Its current objective is ask_around", wrong["message"])
+        self.assertEqual(self.quest["stage"], 0)
+        self.assertTrue(apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "missing_courier", "stage": "ask_around"}])[0]["ok"])
+        self.assertEqual(self.quest["stage"], 1)
+
+    def test_direction_and_finishing_condition_are_separate(self):
+        stage = self.card.quests["missing_courier"]["stages"][0]
+        stage["hint"] = "Tobin is nervous. Let the mare be seen in the stable."          # an older card: direction under the old name
+        text = prompt.describe_quests(self.card, self.state)
+        self.assertIn("Current objective [ask_around], part 1 of 3: Find out what happened to the courier.", text)
+        self.assertIn("How to play it: Tobin is nervous.", text)
+        self.assertIn("It is finished only when: the player learns the horse came back riderless", text)
+        seen_by_player_helpers = prompt.describe_quests(self.card, self.state, "player")
+        self.assertNotIn("Tobin is nervous", seen_by_player_helpers)                      # no spoilers in suggested replies
+        self.assertNotIn("finished only when", seen_by_player_helpers)
+
+    def test_judge_sees_the_objective_and_the_recent_story(self):
+        self.card.quests["missing_courier"]["fail_when"] = "the player leaves the inn for good"
+        self.card.quests["missing_courier"]["stages"][0]["hint"] = "Tobin is nervous."
+        self.state["history"].append({"player": "I look around.", "results": [], "narration": "Rain on the shutters."})
+        system, messages = prompt.judge_prompt(self.card, self.state, "I ask Tobin.", "Tobin swallows. \"The mare came back alone.\"")
+        user = messages[0]["content"]
+        for part in ["Current objective [ask_around], part 1 of 3", "Finished only when: the player learns the horse came back riderless",
+                     "Fails if: the player leaves the inn for good", "Narrator: Rain on the shutters.", "[Newest]\nPlayer: I ask Tobin.", "The mare came back alone."]:
+            self.assertIn(part, user, part)
+        self.assertNotIn("Tobin is nervous", user)                                        # direction is not a condition, so the judge never sees it
+        self.assertNotIn("find_letter", user)                                             # nor later objectives
+        for part in ['"not_yet"', "When unsure, answer not_yet", "completely finished", "Give the reason before the verdict"]:
+            self.assertIn(part, system, part)
+        del self.card.quests["missing_courier"]["stages"][0]["done_when"]
+        self.assertIn("Finished only when: everything the objective describes has happened and is over", prompt.judge_prompt(self.card, self.state, "x", "y")[1][0]["content"])
+
+    def test_verdicts_become_checked_actions(self):
+        reply = json.dumps({"verdicts": [
+            {"quest": "missing_courier", "objective": "ask_around", "why": "Tobin said the mare came back alone.", "verdict": "done"},
+            {"quest": "missing_courier", "objective": "find_letter", "why": "and the rest too", "verdict": "done"},
+            {"quest": "made_up", "objective": "x", "verdict": "done"}, {"quest": "missing_courier", "verdict": "done"}, "junk"], "start": ["made_up"]})
+        actions = prompt.parse_judge(reply, self.card)
+        self.assertEqual(actions, [{"type": "quest_advance", "quest": "missing_courier", "stage": "ask_around"},
+                                   {"type": "quest_advance", "quest": "missing_courier", "stage": "find_letter"}])
+        apply_actions(self.card, self.state, actions)
+        self.assertEqual(self.quest, {"status": "active", "stage": 1})                    # one step, however eager the judge
+        self.assertEqual(prompt.parse_judge('{"verdicts": [{"quest": "missing_courier", "objective": "find_letter", "verdict": "not_yet"}]}', self.card), [])
+        self.assertEqual(prompt.parse_judge('{"verdicts": [{"quest": "missing_courier", "verdict": "failed"}]}', self.card), [{"type": "quest_fail", "quest": "missing_courier"}])
+        self.assertEqual(prompt.parse_judge("no idea", self.card), [])
+
+    def test_bookkeeper_leaves_quests_to_the_judge(self):
+        system, messages = prompt.bookkeeper_prompt(self.card, self.state, "Hi.", [], "Mira nods.", quests=False)
+        self.assertNotIn("quest_advance", system)
+        self.assertNotIn("Quests.", system)
+        self.assertNotIn("[Active quests]", messages[0]["content"])
+        self.assertIn("quest_advance", prompt.bookkeeper_prompt(self.card, self.state, "Hi.", [], "Mira nods.")[0])
+
+
+class StoryMadePlacesTest(unittest.TestCase):
+    def setUp(self):
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        self.me = self.state["actors"]["player"]
+
+    def story(self, *actions):
+        return apply_actions(self.card, self.state, list(actions))
+
+    def test_the_story_can_send_people_somewhere_new(self):
+        results = self.story({"type": "create_location", "name": "The Demon God's Void", "description": "Starless dark and a floor like glass.", "temporary": True},
+                             {"type": "move", "who": "player", "location": "The Demon God's Void"},
+                             {"type": "move", "who": "mira", "location": "gen_the_demon_god_s_void"})
+        self.assertEqual([r["message"] for r in results], ["A new place: The Demon God's Void, for as long as someone is there.",
+                                                           "Traveler leaves Common Room and goes to The Demon God's Void.",
+                                                           "Mira Oakhand leaves Common Room and goes to The Demon God's Void."])
+        self.assertEqual(self.me["location"], "gen_the_demon_god_s_void")
+        self.assertIn("gen_the_demon_god_s_void", self.state["revealed"])
+        text = prompt.describe_state(self.card, self.state)
+        for part in ["Location: The Demon God's Void (gen_the_demon_god_s_void) [made by the story; temporary]. Exits on foot: none",
+                     "Other places on the map, not reachable on foot from here: Common Room (common_room), Stable (stable), Cellar (cellar)",
+                     "Characters here:\n- Mira Oakhand (mira)"]:
+            self.assertIn(part, text, part)
+        walk = apply_actions(self.card, self.state, [{"type": "move", "location": "common_room"}], by_player=True)[0]
+        self.assertIsNone(walk["ok"])                                          # no way out on foot: it is up to the story
+        self.assertEqual(pickle_roundtrip(self.state), self.state)
+
+    def test_a_temporary_place_goes_when_the_last_person_leaves(self):
+        self.story({"type": "create_location", "name": "Dream", "temporary": True}, {"type": "move", "who": "player", "location": "Dream"}, {"type": "move", "who": "mira", "location": "Dream"})
+        self.story({"type": "move", "who": "player", "location": "common_room"})
+        self.assertIn("gen_dream", self.state["generated_locations"])          # Mira is still in it
+        from aigame.state import track
+        track(self.card, self.state, [{"id": "mira", "location": "here"}])     # the scene director notices she came back too
+        self.assertEqual(self.state["generated_locations"], {})
+        self.assertNotIn("gen_dream", self.state["revealed"])
+        self.assertFalse(self.story({"type": "move", "who": "tobin", "location": "Dream"})[0]["ok"])
+
+    def test_a_lasting_place_stays_and_can_be_joined_to_the_map(self):
+        self.story({"type": "create_location", "name": "Roadside Camp", "connected_to": "stable"}, {"type": "move", "who": "player", "location": "Roadside Camp"})
+        self.story({"type": "move", "who": "player", "location": "stable"})
+        self.assertIn("gen_roadside_camp", self.state["generated_locations"])
+        self.assertIn("Roadside Camp (gen_roadside_camp)", prompt.describe_state(self.card, self.state).split("Exits on foot:")[1].split("\n")[0])
+        self.assertTrue(apply_actions(self.card, self.state, [{"type": "move", "location": "gen_roadside_camp"}], by_player=True)[0]["ok"])
+        again = self.story({"type": "create_location", "name": "roadside camp"})[0]
+        self.assertEqual((again["ok"], len(self.state["generated_locations"])), (True, 1))      # asking twice does not make two
+        self.assertFalse(self.story({"type": "create_location", "name": ""})[0]["ok"])
+        self.assertFalse(self.story({"type": "create_location", "name": "X", "connected_to": "atlantis"})[0]["ok"])
+
+    def test_helpers_know_about_made_places(self):
+        self.story({"type": "create_location", "name": "Roadside Camp"})
+        self.assertIn("Roadside Camp (gen_roadside_camp)", prompt.director_prompt(self.card, self.state, ["x"])[1][0]["content"])
+        self.assertEqual(prompt.parse_whereabouts('{"whereabouts": [{"id": "tobin", "location": "gen_roadside_camp"}]}', self.card, self.state), [{"id": "tobin", "location": "gen_roadside_camp"}])
+        self.assertEqual(prompt.parse_whereabouts('{"whereabouts": [{"id": "tobin", "location": "gen_roadside_camp"}]}', self.card), [])
+        self.assertIn("create_location", prompt.action_protocol(self.card))
+        self.assertIn("create_location it first", prompt.bookkeeper_prompt(self.card, self.state, "x", [], "y")[0])
+
+    def test_a_card_can_keep_its_map_fixed(self):
+        self.card.data["rules"]["allow_generated_locations"] = False
+        refused = self.story({"type": "create_location", "name": "Void"})[0]
+        self.assertEqual((refused["ok"], refused["message"]), (False, "This game's map is fixed; the story cannot add places to it."))
+        self.assertNotIn("create_location", prompt.action_protocol(self.card))
+        self.assertNotIn('"type": "create_location"', prompt.bookkeeper_prompt(self.card, self.state, "x", [], "y")[0])
+
+    def test_old_saves_gain_the_list(self):
+        from aigame.state import reconcile
+        del self.state["generated_locations"]
+        reconcile(self.card, self.state)
+        self.assertEqual(self.state["generated_locations"], {})
+
+
+def pickle_roundtrip(value):
+    import pickle
+    return pickle.loads(pickle.dumps(value))
 
 
 if __name__ == "__main__":

@@ -109,6 +109,9 @@ def new_game(card, persona=None):
         "game_over": False,
         # why the player may not travel right now, when the narrator has closed the map to them; else None
         "travel_lock": None,
+        # places the story created that the card never defined, same shape as card locations, with
+        # "temporary" set on those that vanish once everyone has left them
+        "generated_locations": {},
         # True while the game waits for the player's next message; False once that message has been played
         "open": True,
         # a copy of this whole state from just before the turn now in progress, or None between turns
@@ -189,7 +192,7 @@ def reconcile(card, state):
                 del actor["equipment"][slot]
                 notes.append("%s lost equipment this card no longer has (%s)." % (actor["name"], item_id))
         actor["stats"] = dict((s, actor["stats"].get(s, default)) for s, default in starting["stats"].items())
-        if actor["location"] not in card.locations:
+        if actor["location"] not in places(card, state):
             actor["location"] = starting["location"]
 
     for quest_id in [q for q in state["quests"] if q not in card.quests]:
@@ -210,6 +213,30 @@ def reconcile(card, state):
 
 
 
+def places(card, state):
+    """Every location in play: the card's, plus any the story has created. id -> location."""
+    made = state.get("generated_locations")
+    if not made:
+        return card.locations
+    merged = dict(card.locations)
+    merged.update(made)
+    return merged
+
+
+def place_list(card, state):
+    return list(card.data.get("locations", [])) + list(state.get("generated_locations", {}).values())
+
+
+def left_place(state, location_id):
+    """Called when someone has just left a place. A temporary place the story made disappears, from
+    the map too, once nobody is in it."""
+    place = state.get("generated_locations", {}).get(location_id)
+    if place and place.get("temporary") and not any(a["location"] == location_id for a in state["actors"].values()):
+        del state["generated_locations"][location_id]
+        if location_id in state["revealed"]:
+            state["revealed"].remove(location_id)
+
+
 def knows_place(state, location_id):
     """Whether a location is on the player's map."""
     return location_id in state["revealed"]
@@ -219,9 +246,9 @@ def reveal(card, state, location_ids):
     """Puts hidden locations on the player's map. Returns the names of the ones that were new to them."""
     new = []
     for location_id in location_ids:
-        if location_id in card.locations and location_id not in state["revealed"]:
+        if location_id in places(card, state) and location_id not in state["revealed"]:
             state["revealed"].append(location_id)
-            new.append(card.locations[location_id]["name"])
+            new.append(places(card, state)[location_id]["name"])
     return new
 
 
@@ -248,12 +275,15 @@ def track(card, state, updates):
         before = (actor["location"], actor.get("note", ""))
         if "location" in update:
             place = update["location"]
-            actor["location"] = here if place == "here" else place if place in card.locations else None
+            came_from = actor["location"]
+            actor["location"] = here if place == "here" else place if place in places(card, state) else None
+            if came_from != actor["location"]:
+                left_place(state, came_from)
         if "note" in update:
             actor["note"] = update["note"]
         if update.get("location") == "here":
             actor["known"] = True
         if (actor["location"], actor["note"]) != before:
-            where = card.locations.get(actor["location"])
+            where = places(card, state).get(actor["location"])
             changed.append("%s: %s%s" % (actor["name"], where["name"] if where else "off the map", " (%s)" % actor["note"] if actor["note"] else ""))
     return changed

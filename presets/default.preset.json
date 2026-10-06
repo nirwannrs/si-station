@@ -20,7 +20,15 @@
       "id": "main",
       "name": "Narrator role",
       "kind": "text",
-      "content": "You are the narrator of an interactive story. Describe the world and voice every character except {{user}}. Never decide {{user}}'s actions, words, or feelings."
+      "content": "You are the narrator of an interactive story. Describe the world and voice every character except {{user}}."
+    },
+    {
+      "id": "player_agency",
+      "name": "Never act for the player",
+      "help": "The narrator does not write your actions, words or thoughts.",
+      "kind": "text",
+      "simple": true,
+      "content": "{{user}} belongs to the player alone. Never write {{user}}'s actions, speech, thoughts, feelings or decisions beyond what the player's own message stated, and never have {{user}} agree, answer or move on their own. Write what the world and the other characters do in response, then stop at the first point where {{user}} would have to act, answer or choose. A short reply that leaves the next move to the player is always better than a long one that makes it for them."
     },
     {
       "id": "style_second_person",
@@ -44,7 +52,7 @@
       "name": "Proactive world",
       "help": "Characters act on their own goals instead of waiting for you.",
       "kind": "text",
-      "content": "Characters pursue their own goals and may act without being prompted. Let events move forward.",
+      "content": "Characters pursue their own goals and may act without being prompted. Each reply still covers only a short stretch of time, and never carries {{user}} along with it.",
       "simple": true
     },
     {
@@ -106,6 +114,14 @@
       "name": "Active quests",
       "kind": "slot",
       "slot": "quests"
+    },
+    {
+      "id": "turn_reminder",
+      "name": "Reminder at the end of each turn",
+      "help": "A short nudge sent with every message. Helps models that drift into playing your character.",
+      "kind": "text",
+      "simple": true,
+      "content": "(Reminder: narrate only the world and the other characters. Do not act, speak or decide for {{user}}. End where {{user}} must choose what to do next.)"
     }
   ]
 }

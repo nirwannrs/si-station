@@ -79,7 +79,7 @@ init python:
             return None
         renpy.hide_screen("hud")
         store.skip_resolve = True
-        return "I go to %s." % current_card().locations[location_id]["name"]
+        return "I go to %s." % aig_state.places(current_card(), store.game_state)[location_id]["name"]
 
     def shops_here():
         me = store.game_state["actors"][aig_card.PLAYER]
@@ -93,7 +93,7 @@ init python:
             ("equipment", _("Equipment"), card.has("equipment")),
             ("skills", _("Skills"), card.has("skills")),
             ("people", _("People"), card.has("relationships")),
-            ("map", _("Map"), bool(card.locations)),
+            ("map", _("Map"), bool(aig_state.place_list(card, store.game_state))),
             ("quests", _("Quests"), bool(card.quests)),
             ("shop", _("Shop"), aig_prompt.uses(card, "shops") and bool(shops_here())),
         ]
@@ -110,11 +110,11 @@ init python:
     def exit_ids(location_id=None):
         """Ids of the locations reachable in one step from location_id (default: where the player is)."""
         card = current_card()
-        here = card.locations.get(location_id or store.game_state["actors"][aig_card.PLAYER]["location"])
+        here = aig_state.places(card, store.game_state).get(location_id or store.game_state["actors"][aig_card.PLAYER]["location"])
         if not here:
             return []
         ## Only places on the player's map: a hidden place is not offered, or even named, until revealed.
-        return [l["id"] for l in card.data.get("locations", [])
+        return [l["id"] for l in aig_state.place_list(card, store.game_state)
                 if l["id"] != here["id"] and aig_state.knows_place(store.game_state, l["id"])
                 and (l["id"] in here.get("connections", []) or here["id"] in l.get("connections", []))]
 
@@ -127,7 +127,7 @@ init python:
         parts += [stat_line(s) for s in card.data["rules"]["stats"] if "max" in s]
         if card.has("money"):
             parts.append("%s: %g" % (card.currency, me["money"]))
-        here = card.locations.get(me["location"])
+        here = aig_state.places(card, store.game_state).get(me["location"])
         return "   ".join(parts + ([here["name"]] if here else []))
 
     def stat_line(stat):
@@ -147,7 +147,7 @@ screen hud(start="inventory"):
     $ people_here = [(w, a) for w, a in sorted(game_state["actors"].items()) if w != "player" and a["location"] == game_state["actors"]["player"]["location"] and not aig_state.is_away(current_card(), a)]
     $ card = current_card()
     $ me = game_state["actors"]["player"]
-    $ here = card.locations.get(me["location"])
+    $ here = aig_state.places(card, store.game_state).get(me["location"])
     $ shops = shops_here()
 
     add "#000000c0"
@@ -269,7 +269,7 @@ screen hud(start="inventory"):
                             if game_state["travel_lock"] is not None:
                                 text esc("You cannot leave right now: " + game_state["travel_lock"]) color "#ffb070"
                                 null height 6
-                            for place in [l for l in card.data.get("locations", []) if aig_state.knows_place(game_state, l["id"])]:
+                            for place in [l for l in aig_state.place_list(card, game_state) if aig_state.knows_place(game_state, l["id"])]:
                                 hbox:
                                     spacing 16
                                     if here and place["id"] == here["id"]:
@@ -280,14 +280,14 @@ screen hud(start="inventory"):
                                             textbutton _("Go") action Function(go_to, place["id"])
                                     else:
                                         text esc(place["name"]) color "#888888" yalign 0.5
-                                $ ways = [card.locations[i]["name"] for i in exit_ids(place["id"])]
+                                $ ways = [aig_state.places(card, game_state)[i]["name"] for i in exit_ids(place["id"])]
                                 if ways:
                                     text esc("Leads to: " + ", ".join(ways)) size 24 color "#aaaaaa"
                                 if here and place["id"] == here["id"]:
                                     $ people = [a["name"] if a.get("known", True) else "someone you do not know" for w, a in sorted(game_state["actors"].items()) if w != "player" and a["location"] == here["id"] and not aig_state.is_away(card, a)]
                                     if people:
                                         text esc("Here: " + ", ".join(people)) size 24 color "#aaaaaa"
-                            if not card.data.get("locations"):
+                            if not aig_state.place_list(card, game_state):
                                 text _("This story has no map.")
 
                         elif tab == "quests":
@@ -320,7 +320,8 @@ screen hud(start="inventory"):
                             if not shops:
                                 text _("There is no shop here.")
 
-            if game_state["pending_results"]:
+            ## A result the engine left to the story (ok is None) is a note for the narrator, not news for the player.
+            if game_state["pending_results"] and game_state["pending_results"][-1]["ok"] is not None:
                 $ result = game_state["pending_results"][-1]
                 text esc(result["message"]) size 24 color ("#9fd89f" if result["ok"] else "#ff8080")
 

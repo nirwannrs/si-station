@@ -118,6 +118,11 @@
         },
         "relationship_name": { "type": "string", "default": "Affection", "description": "What the 0 to 100 value each character holds toward the player is called." },
         "currency_name": { "type": "string", "default": "Gold" },
+        "allow_generated_locations": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true the story may take characters to places the card does not define; such a place is created during play with a name and description, and has no connections unless the story gives it one. If false the map is fixed to the card's locations."
+        },
         "allow_generated_items": {
           "type": "boolean",
           "default": true,
@@ -305,7 +310,9 @@
               "properties": {
                 "id": { "$ref": "#/$defs/id" },
                 "description": { "type": "string", "description": "Objective text shown in the quest log." },
-                "hint": { "type": "string", "description": "Narrator-only: how this stage gets completed." }
+                "guidance": { "type": "string", "description": "Narrator-only: how to play this part of the story. Not a condition: nothing here decides when the objective is over." },
+                "done_when": { "type": "string", "description": "What must have happened for this objective to count as finished, for the quest judge. If left out, the judge goes by the objective's description, and requires all of it to be over." },
+                "hint": { "type": "string", "description": "Older name for guidance. Still read; new cards should use guidance and done_when." }
               }
             }
           },
