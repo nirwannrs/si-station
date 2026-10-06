@@ -119,6 +119,7 @@ class EditablePromptsTest(unittest.TestCase):
             "direct_scene": prompt.director_prompt(c, s, ["Rain."], prompts=prompts),
             "record_changes": prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", prompts=prompts),
             "judge_quests": prompt.judge_prompt(c, s, "I wait.", "Rain.", prompts=prompts),
+            "write_journal": prompt.journal_prompt(c, s, [{"player": "hi", "narration": "Rain."}], prompts=prompts),
         }
         return dict((task, system) for task, (system, messages) in built.items())
 
@@ -155,6 +156,7 @@ class EditablePromptsTest(unittest.TestCase):
             "direct_scene": [prompt.director_prompt(c, s, ["Rain."])],
             "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False)],
             "judge_quests": [prompt.judge_prompt(c, s, "I wait.", "Rain.")],
+            "write_journal": [prompt.journal_prompt(c, s, s["history"])],
         }
         self.assertEqual(sorted(sent), sorted(name for name, label in prompt.HELPER_TASKS))
         for task, builds in sent.items():
@@ -220,6 +222,21 @@ class ForTheModelOnlyTest(unittest.TestCase):
         for character in sample.data["characters"]:                 # what the People list shows gives nothing away
             self.assertNotIn("told no one", character["description"])
             self.assertNotIn("never reaches", character["description"])
+
+
+class TogglesTest(unittest.TestCase):
+    def test_no_switch_assumes_its_setting_already_exists(self):
+        """Ren'Py's ToggleDict raises if the key is missing, and a player's saved settings never have
+        the keys that were added after they were saved. Pressing "Use a bookkeeper" crashed that way.
+        Switches go through flip(), which takes a default; ToggleDict is left only where the key is
+        created together with the dict it lives in."""
+        always_there = {'ToggleDict(utility, "enabled")', 'ToggleDict(entry, "connection", "main", slot)'}
+        found = set()
+        for name in os.listdir(os.path.join(ROOT, "game")):
+            if name.endswith(".rpy"):
+                found |= set(re.findall(r"Toggle(?:Dict|Field)\((?:[^()]|\([^()]*\))*\)", read("game", name)))
+        self.assertEqual(found - always_there, set())
+        self.assertIn("def flip(target, key, default, one=True, other=False):", read("game", "llm.rpy"))
 
 
 class ButtonFunctionsTest(unittest.TestCase):

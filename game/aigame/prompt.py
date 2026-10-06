@@ -10,6 +10,7 @@ import re
 from .actions import shop_price
 from .card import PLAYER
 from .llm import extract_json
+from . import journal
 from .text import keep_marks_paired
 from .wording import prompt_text
 from .state import available_quests, cast_in_play, named_in, describe_states, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
@@ -23,6 +24,7 @@ HELPER_TASKS = (
     ("direct_scene", "Direct the scene (who speaks, expressions, where characters are)"),
     ("record_changes", "Keep the books (record what each reply changed)"),
     ("judge_quests", "Judge quest progress"),
+    ("write_journal", "Keep the journal (remember each scene)"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -567,7 +569,9 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
         "state": lambda: describe_scene(card, state) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
         "quests": lambda: describe_quests(card, state),
-        "summary": lambda: "[Story so far]\n" + state["summary"] if state["summary"] else "",
+        ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
+        "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
+                                                          journal.describe(journal.recall(card, state, in_play))) if part),
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
@@ -668,6 +672,12 @@ def summary_prompt(card, state, turns, prompts=None):
     scenes = "\n\n".join("Player: %s\nNarrator: %s" % (t["player"], t["narration"]) for t in turns)
     user = "[Existing summary]\n%s\n\n[New scenes]\n%s" % (state["summary"] or "(none yet)", scenes)
     return system, [{"role": "user", "content": fill(card, state, user)}]
+
+
+def journal_prompt(card, state, turns, prompts=None):
+    """Asks for a journal entry about one scene: the turns given, oldest first. See journal.py."""
+    scene = "\n\n".join("Player: %s\nNarrator: %s" % (t["player"], t["narration"]) for t in turns)
+    return prompt_text(prompts, "write_journal"), [{"role": "user", "content": fill(card, state, "[Scene]\n%s" % scene)}]
 
 
 # The scene director: decides, for each paragraph the narrator wrote, who is speaking and how they look.

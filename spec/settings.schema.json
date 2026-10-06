@@ -34,7 +34,8 @@
       "additionalProperties": false,
       "properties": {
         "main": { "$ref": "#/$defs/model_slot", "description": "Writes the narration. Uses the active preset." },
-        "utility": { "$ref": "#/$defs/model_slot", "description": "Optional second model for small jobs. When unset, every task runs on main." }
+        "utility": { "$ref": "#/$defs/model_slot", "description": "Optional second model for small jobs. When unset, every task runs on main." },
+        "memory": { "$ref": "#/$defs/model_slot", "description": "Optional third model, for the jobs that keep the story's memory (write_journal, summarize) when the player gives either a model of its own." }
       }
     },
     "tasks": {
@@ -44,12 +45,13 @@
       "properties": {
         "resolve_actions": { "$ref": "#/$defs/slot_name", "description": "Turn player free text into actions before narration." },
         "suggest_choices": { "$ref": "#/$defs/slot_name", "description": "Generate the suggested replies." },
-        "summarize": { "$ref": "#/$defs/slot_name", "description": "Fold old turns into the running summary." }
+        "summarize": { "$ref": "#/$defs/slot_name", "description": "Fold old turns into the running summary." },
+        "write_journal": { "$ref": "#/$defs/slot_name", "description": "Write the journal entry for a scene that has ended." }
       }
     }
   },
   "$defs": {
-    "slot_name": { "enum": ["main", "utility"], "default": "utility" },
+    "slot_name": { "enum": ["main", "utility", "memory"], "default": "utility", "description": "A job set to a slot that has no model falls back: memory, then utility, then main." },
     "model_slot": {
       "type": "object",
       "required": ["connection", "model"],

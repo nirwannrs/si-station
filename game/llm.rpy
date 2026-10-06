@@ -33,6 +33,7 @@ default stage_speaker = None
 init python:
     import copy
     import json
+    from aigame import journal as aig_journal
     from aigame import keystore as aig_keystore
     from aigame import llm as aig_llm
     from aigame import wording as aig_wording
@@ -80,6 +81,9 @@ init python:
         wording_edit = None
         # what the last preset import did, shown on the Preset screen
         preset_message = ""
+        # the same for the journal's "write one now", and the entry being edited: {"id", "before"}
+        journal_message = ""
+        journal_edit = None
         # API keys, by connection id, while the game runs. They are never part of the saved settings:
         # see the API keys section below. keys_stored is what the system's store holds, to know what changed.
         keys = {}
@@ -88,6 +92,11 @@ init python:
     runtime = Runtime()
 
     ## Settings.
+
+    ## The jobs that keep the story's memory. Each can be given to the main model, to the model for
+    ## small tasks, or to a model of its own (the "memory" slot), since remembering well is worth a
+    ## better model than tidying up is, and worth a cheaper one than writing the story.
+    MEMORY_TASKS = (("write_journal", _("The journal is written by")), ("summarize", _("The summary is written by")))
 
     def llm_settings():
         if persistent.llm is None:
@@ -102,7 +111,13 @@ init python:
                 },
                 "tasks": {},
             }
-        return persistent.llm
+        settings = persistent.llm
+        ## Settings saved before the memory model existed gain its slot, empty and unused.
+        if "memory" not in settings["models"]:
+            settings["models"]["memory"] = {"connection": "main", "model": ""}
+        if not any(c["id"] == "memory" for c in settings["connections"]):
+            settings["connections"].append({"id": "memory", "provider": settings["connections"][0]["provider"], "base_url": "", "api_key": ""})
+        return settings
 
     def llm_connection(connection_id):
         for connection in llm_settings()["connections"]:
@@ -161,13 +176,22 @@ init python:
     def llm_ready():
         return bool(llm_settings()["models"]["main"]["model"].strip())
 
-    def slot_for(task):
-        """The model slot a helper task runs on: utility unless it is off or the player moved the task to main."""
+    def task_choice(task):
+        """Which model the player has given a helper job to: "main", "utility" or "memory". A job left
+        alone goes to the model for small tasks; a choice that cannot be honoured falls back in the
+        order memory, utility, main, so a job never stops running because a slot was emptied."""
         settings = llm_settings()
+        wanted = settings["tasks"].get(task, "utility")
         utility = settings["models"]["utility"]
-        if utility.get("enabled") and utility["model"].strip() and settings["tasks"].get(task, "utility") == "utility":
+        if wanted == "memory" and settings["models"]["memory"]["model"].strip():
+            return "memory"
+        if wanted in ("utility", "memory") and utility.get("enabled") and utility["model"].strip():
             return "utility"
         return "main"
+
+    def slot_for(task):
+        """The model slot a helper task runs on."""
+        return task_choice(task)
 
     input_fields = {}
 
@@ -650,6 +674,8 @@ init python:
         state["pending_results"] = []
         turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "cast": entering,
                 "narration": narration, "direction": direct_scene(card, state, narration)}
+        ## Where the player was and who with when this turn began, for the journal to tell arrivals and reunions by.
+        turn.update(aig_journal.scene_facts(state["restore_point"]))
         if runtime.cut_short:
             ## Kept apart from the results: it is for the player, and is never sent to the model.
             turn["notice"] = ("This reply was cut off at the response length limit (%d tokens), so it may end mid-sentence and "
@@ -665,7 +691,86 @@ init python:
         state["undo_stack"] = (earlier_undo + [before])[-UNDO_DEPTH:]
         store.game_log = (store.game_log + results)[-30:]
         store.draft = ""
+        keep_journal(card, state, before, text, preset)
         summarize_if_long(card, state, preset)
+
+    ## The journal (aigame/journal.py): a short entry about each scene, written when the scene ends
+    ## and sent back to the story model on later turns where it matters.
+
+    def write_journal_entry(card, state, start, end, place, preset):
+        """Asks the helper for an entry about history[start:end] and files it. Returns whether it worked."""
+        try:
+            reply = run_helper("write_journal", aig_prompt.journal_prompt(card, state, state["history"][start:end], prompts=preset["prompts"]))
+        except aig_llm.LLMError:
+            return False
+        written = aig_journal.parse_entry(reply)
+        if written is None:
+            return False
+        aig_journal.add(card, state, start, end, place, written)
+        return True
+
+    def keep_journal(card, state, before, text, preset):
+        """After a turn: if a scene has just ended, write its entry. A failed attempt costs nothing but
+        the entry; the same turns are offered again at the next scene end."""
+        if not params().get("journal", True):
+            return
+        scene = aig_journal.due(before, state, text)
+        if scene is not None:
+            write_journal_entry(card, state, scene[0], scene[1], scene[2], preset)
+
+    def journal_waiting():
+        """How many turns have been played since the last journal entry."""
+        state = store.game_state
+        return len(state["history"]) - min(state.get("journal_upto", 0), len(state["history"]))
+
+    def journal_now():
+        """The player asks for an entry about everything since the last one, wherever the scene stands."""
+        state = store.game_state
+        start, end = min(state.get("journal_upto", 0), len(state["history"])), len(state["history"])
+        if end <= start:
+            return
+        set_busy(True)
+        try:
+            done = write_journal_entry(current_card(), state, max(start, end - aig_journal.LONGEST), end, state["actors"]["player"]["location"], active_preset())
+        finally:
+            set_busy(False)
+        runtime.journal_message = "" if done else "The entry could not be written just now. Try again in a moment."
+        renpy.restart_interaction()
+
+    def journal_entry(entry_id):
+        for entry in store.game_state.get("journal", []):
+            if entry["id"] == entry_id:
+                return entry
+        return None
+
+    def journal_pin(entry_id):
+        entry = journal_entry(entry_id)
+        entry["pinned"] = not entry.get("pinned")
+        renpy.restart_interaction()
+
+    def journal_remove(entry_id):
+        store.game_state["journal"] = [e for e in store.game_state["journal"] if e["id"] != entry_id]
+        renpy.restart_interaction()
+
+    def journal_open_editor(entry_id):
+        entry = journal_entry(entry_id)
+        runtime.journal_edit = {"id": entry_id, "before": dict(entry)}
+        renpy.show_screen("journal_edit", entry_id=entry_id)
+        renpy.restart_interaction()
+
+    def journal_close_editor(keep):
+        edit = runtime.journal_edit
+        renpy.hide_screen("journal_edit")
+        entry = journal_entry(edit["id"])
+        if entry is not None:
+            if keep and entry["content"].strip():
+                ## The keywords follow what the player wrote: a name they added must be able to bring the entry back.
+                entry["who"] = aig_state.named_in(current_card(), entry["title"] + "\n" + entry["content"])
+            else:
+                entry.clear()
+                entry.update(edit["before"])
+        input_fields.clear()
+        renpy.restart_interaction()
 
     def direct_scene(card, state, narration):
         """Works out who speaks in each paragraph and with what expression, and moves the characters
@@ -780,7 +885,7 @@ init python:
 
         The turns stay in history so the player can still read them.
         """
-        limit = param_number("summarize_after_turns", 0, 1000, 20)
+        limit = param_number("summarize_after_turns", 0, 1000, 50)
         ## Leave room in the context for the reply itself.
         budget = param_number("max_context_tokens", 2000, 2000000, 16000) - story_sampling()["max_tokens"]
         for attempt in range(3):
@@ -811,7 +916,7 @@ init python:
         """Sets the player's parameters back to what the preset ships with."""
         sampling, context = active_preset().get("sampling", {}), active_preset().get("context", {})
         fresh = {"bookkeeper": True, "max_tokens": str(sampling.get("max_tokens", 2000)), "max_context_tokens": str(context.get("max_context_tokens", 16000)),
-                 "summarize_after_turns": str(context.get("summarize_after_turns", 20)), "use": {}}
+                 "summarize_after_turns": str(context.get("summarize_after_turns", 50)), "journal": True, "use": {}}
         for key, fallback in PARAM_FALLBACKS.items():
             fresh[key] = sampling.get(key, fallback)
             fresh["use"][key] = key in sampling
@@ -823,6 +928,13 @@ init python:
         if persistent.params is None:
             reset_params()
         return persistent.params
+
+    def flip(target, key, default, one=True, other=False):
+        """Switches a setting between two values. Unlike Ren'Py's ToggleDict it copes with a setting
+        that is not there yet, which is every setting added after the player's settings were first
+        saved: default is what a missing one counts as."""
+        target[key] = other if target.get(key, default) == one else one
+        renpy.restart_interaction()
 
     def param_number(key, low, high, fallback):
         """A typed number from the Parameters screen, kept within sensible bounds. Nonsense falls back."""
@@ -1249,6 +1361,43 @@ screen preset():
             text _("Instructions above the story are sent once and cached, so they cost little. A reminder after the story is sent after your newest message, as the last thing the model reads: it costs a few tokens each turn, but models pay it the most attention. The order matters most among the instructions themselves; the game always sends its changing parts (state, quests, lore) with the newest message.") size 22 color "#999999"
 
 
+## Editing one journal entry.
+screen journal_edit(entry_id):
+    modal True
+    zorder 30
+    $ entry = journal_entry(entry_id)
+
+    add "#000000c0"
+    if entry is not None:
+        frame:
+            align (0.5, 0.5)
+            xsize 1500
+            ysize 760
+            padding (40, 30)
+
+            vbox:
+                spacing 16
+                label _("Journal entry")
+                use settings_input(_("Title"), entry, "title")
+                text _("What the story model is reminded of. Correct anything it got wrong, and add what must not be forgotten. Names you write here also bring the entry back when those people are around.") size 22 color "#999999"
+                button:
+                    xfill True
+                    ysize 380
+                    padding (16, 12)
+                    background "#00000080"
+                    action settings_field(entry, "content").Toggle()
+                    viewport:
+                        scrollbars "vertical"
+                        mousewheel True
+                        input value settings_field(entry, "content") multiline True copypaste True xmaximum 1340
+
+            hbox:
+                align (1.0, 1.0)
+                spacing 40
+                textbutton _("Cancel") action [DisableAllInputValues(), Function(journal_close_editor, False)]
+                textbutton _("Done") action [DisableAllInputValues(), Function(journal_close_editor, True)]
+
+
 ## Editing one of the game's own prompts. Like preset_edit, it only reads.
 screen wording_edit(key):
     modal True
@@ -1354,7 +1503,16 @@ screen parameters():
                 vbox:
                     style_prefix "check"
                     xsize 1100
-                    textbutton _("Use a bookkeeper") action ToggleDict(chosen, "bookkeeper", True, False) selected chosen.get("bookkeeper", True)
+                    textbutton _("Use a bookkeeper") action Function(flip, chosen, "bookkeeper", True) selected chosen.get("bookkeeper", True)
+
+            vbox:
+                spacing 6
+                label _("Journal")
+                text _("At the end of each scene (you go somewhere else, an objective is finished, a fight is over) a helper writes a short entry about it. Much later, when that scene has long left what the story model is sent, the entry is sent again on the turns where it matters: when its subject comes up, when you are back there, or when someone from it is with you. It costs one small call per scene, and nothing on the turns where no entry applies. Read and correct the entries under Journal on the play screen.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Keep a journal") action Function(flip, chosen, "journal", True) selected chosen.get("journal", True)
 
             vbox:
                 spacing 6
@@ -1369,7 +1527,7 @@ screen parameters():
                 vbox:
                     style_prefix "check"
                     xsize 1100
-                    textbutton _("Match the most the story model can take") action [ToggleDict(chosen, "auto_context", True, False), Function(sync_context_size)] selected chosen.get("auto_context", True)
+                    textbutton _("Match the most the story model can take") action [Function(flip, chosen, "auto_context", True), Function(sync_context_size)] selected chosen.get("auto_context", True)
                 use settings_input(_("Tokens"), chosen, "max_context_tokens", digits=True)
                 if chosen.get("auto_context", True):
                     if chosen.get("context_unknown") and chosen.get("context_for") == context_key():
@@ -1389,7 +1547,7 @@ screen parameters():
                     vbox:
                         style_prefix "check"
                         xsize 1100
-                        textbutton _("Set it myself") action ToggleDict(chosen["use"], key)
+                        textbutton _("Set it myself") action Function(flip, chosen["use"], key, False)
                     if chosen["use"].get(key):
                         hbox:
                             spacing 24
@@ -1449,7 +1607,35 @@ screen models():
                         style_prefix "check"
                         xsize 1100
                         for task, title in aig_prompt.HELPER_TASKS:
-                            textbutton title action ToggleDict(settings["tasks"], task, "main", "utility") selected (settings["tasks"].get(task, "utility") == "utility")
+                            if task not in dict(MEMORY_TASKS):
+                                textbutton title action Function(flip, settings["tasks"], task, "utility", "main", "utility") selected (settings["tasks"].get(task, "utility") == "utility")
+
+            ## The story's memory: whether a journal is kept, and which model writes it and the summary.
+            $ wants_memory_model = any(settings["tasks"].get(task) == "memory" for task, title in MEMORY_TASKS)
+            vbox:
+                spacing 10
+                label _("Memory")
+                text _("How the story is remembered once it is too long to send whole. The summary is one short recap of everything so far. The journal keeps an entry for each scene and reminds the story model of the ones that matter. Each can be written by the main model, by the model for small tasks, or by a model of its own.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Keep a journal") action Function(flip, params(), "journal", True) selected params().get("journal", True)
+                for task, title in MEMORY_TASKS:
+                    if task != "write_journal" or params().get("journal", True):
+                        hbox:
+                            spacing 20
+                            text title yalign 0.5 min_width 420
+                            hbox:
+                                style_prefix "radio"
+                                spacing 10
+                                textbutton _("Main model") action SetDict(settings["tasks"], task, "main") selected (settings["tasks"].get(task, "utility") == "main" or (settings["tasks"].get(task, "utility") == "utility" and not utility["enabled"]))
+                                if utility["enabled"]:
+                                    textbutton _("Small-tasks model") action SetDict(settings["tasks"], task, "utility") selected (settings["tasks"].get(task, "utility") == "utility")
+                                textbutton _("Its own model") action SetDict(settings["tasks"], task, "memory") selected (settings["tasks"].get(task) == "memory")
+                if wants_memory_model:
+                    use model_slot("memory", _("Memory model"), _("Used for whichever of the two above is set to its own model."))
+                    if not settings["models"]["memory"]["model"].strip():
+                        text _("No model is chosen yet, so those jobs still run on the other models for now.") size 22 color "#ffb070"
 
 
 screen model_slot(slot, title, help):
@@ -1463,11 +1649,11 @@ screen model_slot(slot, title, help):
         label title
         text help size 24
 
-        if slot == "utility":
+        if slot != "main":
             vbox:
                 style_prefix "check"
                 xsize 1100
-                textbutton _("Same provider and key as the main model") action ToggleDict(entry, "connection", "main", "utility")
+                textbutton _("Same provider and key as the main model") action ToggleDict(entry, "connection", "main", slot)
 
         if entry["connection"] == slot:
             hbox:

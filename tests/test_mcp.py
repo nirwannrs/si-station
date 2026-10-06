@@ -198,7 +198,7 @@ class SessionTest(unittest.TestCase):
         # Presets: read the format, make one with a reworded helper prompt, and be told what is wrong with a bad one.
         failed, format_ = self.call("preset_format")
         self.assertEqual(sorted(e["key"] for e in format_["builtin_prompts"] if e["reader"] == "helper"),
-                         ["direct_scene", "judge_quests", "record_changes", "resolve_actions", "suggest_choices", "summarize"])
+                         ["direct_scene", "judge_quests", "record_changes", "resolve_actions", "suggest_choices", "summarize", "write_journal"])
         self.assertIn("prompts", format_["schema"]["properties"])
         self.assertEqual(self.call("list_presets")[1]["presets"], [])
         with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:

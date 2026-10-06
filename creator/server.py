@@ -103,6 +103,7 @@ def _preview_build(card, state, preset, key):
         "direct_scene": lambda: game_prompt.director_prompt(card, state, game_prompt.split_paragraphs(reply + "\n\n(Its second paragraph.)"), prompts=prompts),
         "suggest_choices": lambda: game_prompt.suggest_prompt(card, state, (preset.get("suggestions") or {}).get("count", 3), prompts=prompts),
         "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts),
+        "write_journal": lambda: game_prompt.journal_prompt(card, state, state["history"], prompts=prompts),
     }.get(key, lambda: None)()
 
 

@@ -129,6 +129,9 @@ def new_game(card, persona=None):
     }
     for quest_id, progress in state["quests"].items():
         progress["met"] = quest_marks(card, state, card.quests[quest_id])
+    # What happened in each scene so far, and the turn the entries reach up to. See journal.py.
+    state["journal"] = []
+    state["journal_upto"] = 0
     # character ids in the order they entered the story. See cast_in_play.
     state["cast"] = []
     state["cast"] = cast_in_play(card, state)
@@ -181,6 +184,9 @@ def reconcile(card, state):
     """
     fresh = new_game(card)
     notes = []
+    if "journal" not in state:
+        # A save from before the journal: it starts from here, not from scenes the summary has already taken in.
+        state["journal"], state["journal_upto"] = [], len(state.get("history", []))
     if "cast" not in state:
         # A save from before the cast was tracked: everyone the story has named so far has entered it.
         told = "\n".join("%s\n%s" % (t["player"], t["narration"]) for t in state.get("history", []))

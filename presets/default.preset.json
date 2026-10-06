@@ -9,7 +9,7 @@
   },
   "context": {
     "max_context_tokens": 16000,
-    "summarize_after_turns": 20
+    "summarize_after_turns": 50
   },
   "suggestions": {
     "enabled": true,

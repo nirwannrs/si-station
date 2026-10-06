@@ -294,6 +294,17 @@ Reply with JSON only:
  "scene": "..."}""")
 
 
+_builtin('write_journal', 'helper', "Keep the journal", "Writes a short entry about a scene once it is over, so the story model can be reminded of it much later.",
+         {}, """\
+You keep the journal of a text adventure. A scene has just ended; it is given to you in full. Write one entry about it, so that the narrator can be reminded of this scene much later, when the scene itself is long out of sight.
+
+Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, what was learned or kept secret, how anyone's standing with the player changed, and what was left unfinished. Use names. Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
+
+Give it a short title, and three to six keywords: the names, places, objects and subjects that, if they came up again, should bring this scene to mind. Use the words the story used.
+
+Reply with JSON only:
+{"title": "...", "content": "...", "keywords": ["...", "..."]}""")
+
 _builtin('suggest_choices', 'helper', "Suggest replies", "Writes the suggested replies shown above the input box.",
          {'count': 'how many suggestions to give'}, """\
 You suggest what the player could do next in a text adventure. Give {{count}} short, distinct options, written in first person as the player ("I ask Mira about the cellar."). Mix talking, acting and exploring. Only suggest using or buying things the game state shows are available. One sentence each.
@@ -354,3 +365,5 @@ _sends("suggest_choices", _HELPER,
 _sends("summarize", _HELPER,
        ("[Existing summary]", "the summary so far", "The save: what this same job wrote the last time it ran. \"(none yet)\" the first time.", None),
        ("[New scenes]", "the turns being folded into it", "The save: the oldest turns that are not in the summary yet, word for word, each as what the player typed and what the story model replied. The game takes the older half of the turns the story model still sees, once there are more than the player's \"summarize after\" number or the prompt no longer fits the context size.", "preset:settings"))
+_sends("write_journal", _HELPER,
+       ("[Scene]", "the scene that just ended, turn by turn", "The save: every turn since the last journal entry, word for word, each as what the player typed and what the story model replied. The game decides where a scene ends: the player goes somewhere else, an objective is finished, a fight is over, or twenty turns have passed.", None))

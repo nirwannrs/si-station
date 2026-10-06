@@ -41,7 +41,7 @@
       }
     },
     "prompts": {
-      "description": "Replacements for the game's own wording, by name: how the rules are explained to the story model (narrator_mechanics, narrator_prose, narrator_records, leaving_prose, leaving_records) and the whole prompt of each helper job (resolve_actions, record_changes, judge_quests, direct_scene, suggest_choices, summarize). Leave one out to use the game's own. The defaults, and which {{parts}} the game fills in for each, are in game/aigame/wording.py; the creator's preset builder shows them. A part left out of a replacement is added at its end.",
+      "description": "Replacements for the game's own wording, by name: how the rules are explained to the story model (narrator_mechanics, narrator_prose, narrator_records, leaving_prose, leaving_records) and the whole prompt of each helper job (resolve_actions, record_changes, judge_quests, direct_scene, suggest_choices, summarize, write_journal). Leave one out to use the game's own. The defaults, and which {{parts}} the game fills in for each, are in game/aigame/wording.py; the creator's preset builder shows them. A part left out of a replacement is added at its end.",
       "type": "object",
       "additionalProperties": { "type": "string" }
     },

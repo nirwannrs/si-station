@@ -95,6 +95,7 @@ init python:
             ("people", _("People"), card.has("relationships")),
             ("map", _("Map"), bool(aig_state.place_list(card, store.game_state))),
             ("quests", _("Quests"), bool(card.quests)),
+            ("journal", _("Journal"), bool(store.game_state.get("journal")) or bool(store.game_state["history"])),
             ("shop", _("Shop"), aig_prompt.uses(card, "shops") and bool(shops_here())),
         ]
         return [(name, title) for name, title, shown in tabs if shown]
@@ -300,6 +301,31 @@ screen hud(start="inventory"):
                                     text esc("%s (%s)" % (quest["title"], progress["status"])) color "#888888"
                             if not game_state["quests"]:
                                 text _("No quests yet.")
+
+                        elif tab == "journal":
+                            $ entries = game_state.get("journal", [])
+                            $ folded = game_state.get("summarized", 0)
+                            text _("What the story remembers of each scene. An entry is written when a scene ends, and the story model is reminded of it later on, when it matters. Correct an entry if it got something wrong; pin one to have it sent every turn.") size 22 color "#aaaaaa"
+                            hbox:
+                                spacing 24
+                                if journal_waiting() and not runtime.busy:
+                                    textbutton esc("Write an entry now (%d turn%s since the last)" % (journal_waiting(), "" if journal_waiting() == 1 else "s")) action Function(journal_now)
+                                if runtime.journal_message:
+                                    text esc(runtime.journal_message) size 22 color "#ffb070" yalign 0.5
+                            for entry in reversed(entries):
+                                vbox:
+                                    spacing 2
+                                    hbox:
+                                        spacing 18
+                                        text esc(entry["title"]) size 30 xsize 820 yalign 0.5 color ("#ffd28a" if entry.get("pinned") else "#ffffff")
+                                        textbutton (_("Unpin") if entry.get("pinned") else _("Pin")) action Function(journal_pin, entry["id"]) text_size 24 yalign 0.5
+                                        textbutton _("Edit") action Function(journal_open_editor, entry["id"]) text_size 24 yalign 0.5
+                                        textbutton _("Remove") action Confirm(_("Remove this entry? The story model will no longer be reminded of that scene."), Function(journal_remove, entry["id"])) text_size 24 yalign 0.5
+                                    text esc(entry["content"]) size 24
+                                    text esc("Turns %d to %d. %s" % (entry["start"] + 1, entry["end"],
+                                        "Sent every turn." if entry.get("pinned") else "Sent when it matters." if entry["end"] <= folded else "Not sent yet: the story model still sees this scene itself.")) size 20 color "#888888"
+                            if not entries:
+                                text _("No entries yet. The first is written when the first scene ends.") color "#aaaaaa"
 
                         elif tab == "shop":
                             for shop in shops:
