@@ -58,6 +58,11 @@ class EngineTest(unittest.TestCase):
     def test_persona_overrides_default_text_but_keeps_loadout(self):
         me = new_game(self.card, {"name": "Ash"})["actors"]["player"]
         self.assertEqual((me["name"], me["money"]), ("Ash", 6))
+        self.assertEqual(me["description"], "A wanderer looking for work and a dry bed.")        # a part left out is the card's
+        # The player's own persona, whole: nothing of the card's description is mixed in, and the starting kit is still the card's.
+        own = new_game(self.card, {"name": "Ranma", "description": "", "appearance": "Red pigtail."})["actors"]["player"]
+        self.assertEqual((own["name"], own["description"], own["appearance"]), ("Ranma", "", "Red pigtail."))
+        self.assertEqual((own["money"], own["inventory"], own["equipment"]["body"]), (6, {"healing_draught": 1, "belt_knife": 1}, "travel_cloak"))
 
     def test_display_mode(self):
         self.assertTrue(self.card.visual)

@@ -150,6 +150,12 @@ init python:
         save_keys()
         return dict(connection, api_key=runtime.keys.get(connection["id"], "") or connection.get("api_key", ""))
 
+    def keep_settings():
+        """Writes the settings to disk now. Ren'Py would get to it eventually, but a model that was
+        just chosen must not be lost to a crash, a reload or the window being closed."""
+        save_keys()
+        renpy.save_persistent()
+
     def llm_ready():
         return bool(llm_settings()["models"]["main"]["model"].strip())
 
@@ -503,25 +509,43 @@ init python:
         runtime.busy = on
         store._autosave = not on
 
-    def undo_turn():
-        """Takes back the last turn: the story, and everything it changed, go back to how they were
-        before it, and what the player typed is put back in the input box to edit or resend.
+    ## Undo. Before each turn the whole game state is copied. Taking a turn back puts that copy in
+    ## place, so everything the turn changed goes back with it: what the story model wrote, what the
+    ## bookkeeper recorded, where the scene director put people, quest progress, places the story
+    ## made, the summary. Nothing is patched up piece by piece, so nothing can be missed. The last
+    ## UNDO_DEPTH turns are kept. A copy leaves out the story so far, which only ever grows at its
+    ## end and is cut back to its old length instead.
 
-        Only one turn can be taken back this way. Without a stored copy to return to (a save from
-        before this existed, or a second undo in a row) the last turn is just removed from the story.
-        """
+    UNDO_DEPTH = 10
+
+    def undo_copies(state):
+        """The copies undo can return to, oldest first. A save from before several were kept has one, held whole."""
+        copies = list(state.get("undo_stack") or [])
+        old = state.get("undo_point")
+        if old is not None and not copies:
+            old = dict(old)
+            old["history_len"] = len(old.pop("history", []))
+            copies = [old]
+        return copies
+
+    def can_undo():
+        return bool(store.game_state and undo_copies(store.game_state))
+
+    def undo_turn():
+        """Takes back the last turn: the story, and everything it changed, go back to exactly how they
+        were before it, and what the player typed is put back in the input box to edit or resend.
+        Pressing it again takes back the turn before, for as many turns as copies are kept."""
         state = store.game_state
-        if not state["history"]:
+        copies = undo_copies(state)
+        if not state["history"] or not copies:
             return
         typed = state["history"][-1]["player"]
-        before = state.get("undo_point")
-        if before is not None:
-            state.clear()
-            state.update(before)
-        else:
-            state["history"].pop()
-            state["turn"] = max(0, state["turn"] - 1)
-            state["summarized"] = min(state.get("summarized", 0), len(state["history"]))
+        before = copies.pop()
+        story = state["history"][:before.pop("history_len")]
+        state.clear()
+        state.update(before)
+        state["history"] = story
+        state["undo_stack"] = copies
         state["open"] = True
         store.suggestions = []
         store.turn_error = None
@@ -556,7 +580,9 @@ init python:
             return
         ## The copy must not carry older copies inside it, or saves would grow with every turn.
         state["restore_point"] = None
-        earlier_undo = state.pop("undo_point", None)
+        earlier_undo = undo_copies(state)
+        state.pop("undo_point", None)
+        state.pop("undo_stack", None)
         state["restore_point"] = copy.deepcopy(state)
         card, preset = current_card(), active_preset()
         try:
@@ -597,7 +623,7 @@ init python:
         except aig_llm.LLMError as e:
             restore_turn(state)
             state["open"] = False
-            state["undo_point"] = earlier_undo
+            state["undo_stack"] = earlier_undo
             store.turn_error = str(e)
             store.draft = text
             return
@@ -608,14 +634,16 @@ init python:
         if runtime.cut_short:
             ## Kept apart from the results: it is for the player, and is never sent to the model.
             turn["notice"] = ("This reply was cut off at the response length limit (%d tokens), so it may end mid-sentence and "
-                              "anything it changed at the very end may be missing. Raise Response length in Menu > Parameters.") % story_sampling()["max_tokens"]
+                              "anything it changed at the very end may be missing. Raise Response length in Menu > Settings > Parameters.") % story_sampling()["max_tokens"]
         ## From here the turn counts as played: nothing below may pause before these three lines are done.
         state["history"].append(turn)
         state["cast"] = state.get("cast", []) + [c for c in entering if c not in state.get("cast", [])]
         state["turn"] += 1
         state["open"] = False
         ## What the turn started from becomes what Undo goes back to.
-        state["undo_point"], state["restore_point"] = state["restore_point"], None
+        before, state["restore_point"] = state["restore_point"], None
+        before["history_len"] = len(before.pop("history"))
+        state["undo_stack"] = (earlier_undo + [before])[-UNDO_DEPTH:]
         store.game_log = (store.game_log + results)[-30:]
         store.draft = ""
         summarize_if_long(card, state, preset)
@@ -699,8 +727,11 @@ init python:
         return stage_cache[key]
 
     def stage_background():
-        here = aig_state.places(current_card(), store.game_state).get(store.game_state["actors"][aig_card.PLAYER]["location"])
-        return card_image(here["background"]) if here and here.get("background") else None
+        """The picture behind the scene: the one of the place the player is at, else the card's own, else none."""
+        card = current_card()
+        here = aig_state.places(card, store.game_state).get(store.game_state["actors"][aig_card.PLAYER]["location"])
+        path = (here or {}).get("background") or card.data.get("display", {}).get("background")
+        return card_image(path) if path else None
 
     def stage_cast():
         """What to draw for each character where the player is: (id, name, image or None, x position, is dimmed)."""
@@ -921,7 +952,21 @@ screen stage():
                 text esc(name) align (0.5, 0.1) color speaker_color(char_id)
 
 
+## What a text-only card shows behind its text: its background picture, darkened so the story
+## stays easy to read, or plain black when the card has none. It is drawn by the screens that need
+## it, not shown by the script, so a save made before a card had a picture still gets it.
+screen backdrop():
+    $ background = stage_background() if store.card_name and store.game_state else None
+    add "#000000"
+    if background:
+        add background fit "cover" xysize (config.screen_width, config.screen_height)
+        ## Only a light veil here: the panels the text sits in are already dark.
+        add "#00000040"
+
+
 screen thinking():
+    if store.card_name and not current_card().visual:
+        use backdrop
     frame:
         align (0.5, 0.35)
         padding (60, 40)
@@ -953,7 +998,7 @@ screen turn_input():
     $ card = current_card()
 
     if not card.visual:
-        add "#000000"
+        use backdrop
 
     frame:
         xfill True
@@ -1032,7 +1077,7 @@ screen turn_input():
                     spacing 14
                     text (_("Enter starts a new line, Shift+Enter sends.") if persistent.enter_newline else _("Enter sends, Shift+Enter starts a new line.")) size 22 color "#999999" yalign 0.5
                     textbutton _("Switch") action Function(toggle_enter_key) text_size 22 yalign 0.5
-                    if game_state["history"]:
+                    if game_state["history"] and can_undo():
                         textbutton _("Undo last turn") action Function(undo_turn) text_size 22 yalign 0.5
                     text _("*italic*  **bold**") size 22 color "#999999" yalign 0.5
                     if usage_brief():
@@ -1304,8 +1349,9 @@ screen models():
     tag menu
 
     ## A model id typed by hand is noticed when the player leaves this screen.
-    on "hide" action [Function(sync_context_size), Function(save_keys)]
-    on "replaced" action [Function(sync_context_size), Function(save_keys)]
+    ## Leaving the page also lets go of whichever box was being typed in, so later typing cannot land in it.
+    on "hide" action [DisableAllInputValues(), Function(sync_context_size), Function(keep_settings)]
+    on "replaced" action [DisableAllInputValues(), Function(sync_context_size), Function(keep_settings)]
 
     use game_menu(_("Models"), scroll="viewport"):
         $ settings = llm_settings()
@@ -1379,7 +1425,7 @@ screen model_slot(slot, title, help):
             spacing 30
             if suggested and entry["model"] != suggested:
                 textbutton _("Use [suggested]") action SetDict(entry, "model", suggested)
-            textbutton _("Choose from list") action [Function(load_models, slot), Show("model_picker", slot=slot)]
+            textbutton _("Choose from list") action [DisableAllInputValues(), Function(load_models, slot), Show("model_picker", slot=slot)]
             textbutton _("Test") action Function(test_model, slot)
 
         if slot in runtime.tests:
@@ -1393,6 +1439,11 @@ screen model_picker(slot):
     default query = ""
     $ entry = llm_settings()["models"][slot]
     $ listed = runtime.models.get(slot)
+
+    ## Typing goes to whichever box was clicked last. If that was a box on the page underneath, the
+    ## search here would get nothing, so every other box is let go of when this opens, which hands
+    ## the keyboard to the search.
+    on "show" action DisableAllInputValues()
 
     add "#000000c0"
 
@@ -1430,11 +1481,11 @@ screen model_picker(slot):
                     vbox:
                         for model in matches[:150]:
                             textbutton esc(model):
-                                action [SetDict(entry, "model", model), Function(sync_context_size), Hide("model_picker")]
+                                action [DisableAllInputValues(), SetDict(entry, "model", model), Function(sync_context_size), Function(keep_settings), Hide("model_picker")]
                                 selected (entry["model"] == model)
                                 text_size 26
 
-        textbutton _("Close") action Hide("model_picker") xalign 1.0 yalign 1.0
+        textbutton _("Close") action [DisableAllInputValues(), Hide("model_picker")] xalign 1.0 yalign 1.0
 
 
 screen settings_input(title, target, key, secret=False, hint=None, digits=False):

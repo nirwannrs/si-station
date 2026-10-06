@@ -31,8 +31,9 @@
         "mode": {
           "enum": ["visual", "text"],
           "default": "visual",
-          "description": "visual: backgrounds, sprites and a text box, using the card's assets. text: no assets, the story as a scrolling text log."
-        }
+          "description": "visual: backgrounds, sprites and a text box, using the card's assets. text: the story as a scrolling text log, with no sprites."
+        },
+        "background": { "$ref": "#/$defs/asset", "description": "A picture for the whole card, shown wherever the place the player is at has no background of its own. In text mode it is shown darkened behind the story. A location's own background works in both modes." }
       }
     },
     "world": {
@@ -223,6 +224,7 @@
           "appearance": { "type": "string", "description": "Physical look. Also the base prompt for sprite generation in the creator." },
           "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "Colour of the character's name when they speak." },
           "dialogue_examples": { "type": "string" },
+          "ai_notes": { "type": "string", "description": "Anything else the AI needs to play this character that the player should not read: secrets, motives, how they fit the plot, what they will and will not do. Given to the story model with the rest of the character; never shown in the game. (description is the part the player sees, in the People list.)" },
           "location": { "$ref": "#/$defs/id", "description": "Omit for a character kept off the map until the story or a fight brings them in." },
           "xp_reward": { "type": "number", "minimum": 0, "description": "Experience the player gets for beating this character in a system fight." },
           "sprites": {

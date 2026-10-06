@@ -71,7 +71,10 @@ def describe_states(actor):
 
 
 def new_game(card, persona=None):
-    """persona is what the player typed in game (name, description, appearance); it overrides the card's default_persona text."""
+    """persona is the player's own (name, description, appearance), used in place of the card's
+    default_persona. Whatever it gives is used as given, empty included, so a player's own persona
+    is never mixed with the description the card wrote for someone else; only a part it leaves
+    out altogether falls back to the card's. What the player starts with is always the card's."""
     default = card.data.get("default_persona", {})
     persona = persona or {}
     player = _new_actor(
@@ -80,8 +83,8 @@ def new_game(card, persona=None):
         default.get("start"),
         card.data["world"].get("start_location"),
     )
-    player["description"] = persona.get("description") or default.get("description", "")
-    player["appearance"] = persona.get("appearance") or default.get("appearance", "")
+    player["description"] = persona["description"] if "description" in persona else default.get("description", "")
+    player["appearance"] = persona["appearance"] if "appearance" in persona else default.get("appearance", "")
 
     actors = {PLAYER: player}
     for c in card.data.get("characters", []):

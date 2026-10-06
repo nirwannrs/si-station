@@ -80,7 +80,7 @@ class LLMError(Exception):
 def base_url(connection):
     url = (connection.get("base_url") or "").strip() or DEFAULT_BASE_URLS.get(connection["provider"], "")
     if not url:
-        raise LLMError("This provider needs a base URL. Open Menu > Models.")
+        raise LLMError("This provider needs a base URL. Open Menu > Settings > Models.")
     return url.rstrip("/")
 
 
@@ -88,7 +88,7 @@ def _headers(connection):
     key = (connection.get("api_key") or "").strip()
     if connection["provider"] == "anthropic":
         if not key:
-            raise LLMError("No API key is set for Anthropic. Open Menu > Models.")
+            raise LLMError("No API key is set for Anthropic. Open Menu > Settings > Models.")
         return {"x-api-key": key, "anthropic-version": "2023-06-01"}
     return {"Authorization": "Bearer " + key} if key else {}
 
@@ -102,7 +102,7 @@ def chat_request(connection, model, system, messages, sampling=None):
     sampling uses the preset's sampling keys; anything missing is left to the provider's default.
     """
     if not model:
-        raise LLMError("No model is set. Open Menu > Models.")
+        raise LLMError("No model is set. Open Menu > Settings > Models.")
     sampling = sampling or {}
     headers = _headers(connection)
     marker = _cache_marker(connection, model)

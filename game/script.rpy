@@ -12,7 +12,7 @@ label start:
         return
 
     $ sync_context_size()
-    $ start_card(persistent.card)
+    $ start_card(persistent.card, chosen_persona())
     $ start_suggestions()
 
     show screen thinking

@@ -203,6 +203,24 @@ class EditablePromptsTest(unittest.TestCase):
             self.assertIn(expected, problems)
 
 
+class ForTheModelOnlyTest(unittest.TestCase):
+    def test_a_characters_notes_reach_the_model_and_never_the_screen(self):
+        from aigame.card import load_card
+        from aigame.state import new_game
+        sample = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(sample)
+        system = prompt.narrator_prompt(sample, state, json.loads(read("presets", "default.preset.json")), "I wait.", [], record=False)[0]
+        self.assertIn("Notes for the narrator: Saw the courier's horse come back without a rider", system)
+        self.assertIn("ai_notes", CARD_SCHEMA["properties"]["characters"]["items"]["properties"])
+        self.assertIn('k: "ai_notes"', read("creator", "static", "app.js"))
+        for name in os.listdir(os.path.join(ROOT, "game")):
+            if name.endswith(".rpy"):
+                self.assertNotIn("ai_notes", read("game", name), "the game's screens must not read a character's notes")
+        for character in sample.data["characters"]:                 # what the People list shows gives nothing away
+            self.assertNotIn("told no one", character["description"])
+            self.assertNotIn("never reaches", character["description"])
+
+
 class ButtonFunctionsTest(unittest.TestCase):
     def test_functions_run_by_buttons_return_nothing(self):
         """In Ren'Py, when a button runs Function(f) and f returns a value, that value closes the

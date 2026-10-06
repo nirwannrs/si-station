@@ -264,3 +264,6 @@ h3 { font-size: 17px; }
 textarea { overflow-y: hidden; }
 :root[data-boxes="short"] textarea { max-height: 9.5em; overflow-y: auto; }
 :root:not([data-boxes="short"]) .sent-text { max-height: none; }
+button.danger { color: var(--bad); border-color: var(--bad-line); }
+button.danger:hover { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+.clear-row { align-items: center; margin-bottom: 16px; }

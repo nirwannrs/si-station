@@ -41,8 +41,8 @@ init python:
             card = inserted_card()
         except aig_card.CardError:
             card = None
-        ## No game in progress: the main menu and Card info use the card's default player name.
-        return text.replace("{{user}}", (card.data.get("default_persona", {}).get("name") if card else None) or "you")
+        ## No game in progress: the main menu and Card info use the name a new game would be played under.
+        return text.replace("{{user}}", persona_in_use(card)["name"] if card else "you")
 
     def esc(text):
         """Makes card or LLM text safe to show, with the player's name filled in."""
@@ -336,6 +336,9 @@ screen battle():
     $ fight = game_state["battle"]
     $ health = card.battle["health_stat"]
     $ foes = aig_battle.standing(card, game_state) if fight else []
+
+    if not card.visual:
+        use backdrop
 
     frame:
         xfill True

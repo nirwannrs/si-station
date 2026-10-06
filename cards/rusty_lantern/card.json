@@ -227,9 +227,11 @@
     {
       "id": "tobin",
       "name": "Tobin",
-      "description": "Stable boy, about fourteen. Saw the courier's horse come back without a rider and has told no one.",
+      "color": "#a8d08d",
+      "description": "Stable boy at the Rusty Lantern, about fourteen.",
       "personality": "Nervous, eager to please, terrible liar.",
       "appearance": "Skinny boy with straw in his hair, oversized coat, mud to the knees.",
+      "ai_notes": "Saw the courier's horse come back without a rider and has told no one. He took the sealed letter from the saddle and is afraid of what Mira will say.",
       "location": "stable",
       "start": {
         "stats": {
@@ -242,7 +244,6 @@
         ],
         "relationship": 40
       },
-      "color": "#a8d08d",
       "sprites": {
         "neutral": "assets/sprites/tobin/neutral.png",
         "happy": "assets/sprites/tobin/happy.png",
@@ -254,9 +255,10 @@
       "id": "marsh_bandit",
       "name": "Marsh Bandit",
       "color": "#c06060",
-      "description": "A lean cutthroat in a mud-caked coat, sent to make sure the courier's letter never reaches the inn. Not in the scene until the story brings him in.",
+      "description": "A lean cutthroat in a mud-caked coat.",
       "personality": "Patient, mocking, a coward once he is losing.",
       "appearance": "Wiry man, hood up, a lantern hooked at his belt, a long knife.",
+      "ai_notes": "Sent to make sure the courier's letter never reaches the inn. Not in the scene until the story brings him in.",
       "xp_reward": 30,
       "start": {
         "stats": {

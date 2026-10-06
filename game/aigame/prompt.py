@@ -483,7 +483,8 @@ def describe_cast(card, cast=None, heading="[Characters]"):
     chosen = card.data.get("characters", []) if cast is None else [card.characters[c] for c in cast if c in card.characters]
     for c in chosen:
         parts = ["%s: %s" % (c["name"], c["description"])]
-        for label, key in (("Personality", "personality"), ("Appearance", "appearance"), ("How they talk", "dialogue_examples")):
+        ## ai_notes is for the model alone; the game never shows it to the player.
+        for label, key in (("Personality", "personality"), ("Appearance", "appearance"), ("How they talk", "dialogue_examples"), ("Notes for the narrator", "ai_notes")):
             if c.get(key):
                 parts.append("%s: %s" % (label, c[key]))
         lines.append("\n".join(parts))

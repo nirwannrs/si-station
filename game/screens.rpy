@@ -287,6 +287,27 @@ style quick_button_text:
 ## This screen is included in the main and game menus, and provides navigation
 ## to other menus, and to start the game.
 
+## The menu is kept short. Everything that is a setting (display and sound, the models, how they
+## write, what they are told, the keys, about) sits behind one entry, Settings, and is switched
+## between with the row of tabs that game_menu draws. History is on the play screen itself.
+
+define settings_tabs = [
+    ("preferences", _("Display")),
+    ("models", _("Models")),
+    ("parameters", _("Parameters")),
+    ("preset", _("Preset")),
+    ("help", _("Keys")),
+    ("about", _("About")),
+]
+
+init python:
+    def open_settings_tab():
+        """The settings page showing now, or None when the menu is on something else."""
+        for name, title in settings_tabs:
+            if renpy.get_screen(name):
+                return name
+        return None
+
 screen navigation():
 
     vbox:
@@ -303,22 +324,16 @@ screen navigation():
 
         else:
 
-            textbutton _("History") action ShowMenu("history")
-
             ## Not while a reply is being written: there is nothing sensible for such a save to resume to.
             textbutton _("Save") action ShowMenu("save") sensitive (not runtime.busy)
 
         textbutton _("Load") action ShowMenu("load")
 
-        textbutton _("Preferences") action ShowMenu("preferences")
-
-        textbutton _("Models") action ShowMenu("models")
-
-        textbutton _("Parameters") action ShowMenu("parameters")
-
-        textbutton _("Preset") action ShowMenu("preset")
+        textbutton _("Persona") action ShowMenu("persona")
 
         textbutton _("Card info") action ShowMenu("card_info")
+
+        textbutton _("Settings") action ShowMenu("preferences") selected bool(open_settings_tab())
 
         if _in_replay:
 
@@ -327,13 +342,6 @@ screen navigation():
         elif not main_menu:
 
             textbutton _("Main Menu") action MainMenu()
-
-        textbutton _("About") action ShowMenu("about")
-
-        if renpy.variant("pc") or (renpy.variant("web") and not renpy.variant("mobile")):
-
-            ## Help isn't necessary or relevant to mobile devices.
-            textbutton _("Help") action ShowMenu("help")
 
         if main_menu:
 
@@ -506,9 +514,31 @@ screen game_menu(title, scroll=None, yinitial=0.0, spacing=0):
 
     label title
 
+    ## The settings pages share one menu entry and are switched between here.
+    $ tab = open_settings_tab()
+    if tab:
+        hbox:
+            style_prefix "settings_tab"
+            xpos 500
+            ypos 128
+            spacing 56
+            for name, tab_title in settings_tabs:
+                ## Key help is of no use on a phone.
+                if name != "help" or renpy.variant("pc") or (renpy.variant("web") and not renpy.variant("mobile")):
+                    textbutton tab_title action ShowMenu(name) selected (name == tab)
+
     if main_menu:
         key "game_menu" action ShowMenu("main_menu")
 
+
+style settings_tab_button is navigation_button
+style settings_tab_button:
+    size_group None         ## each tab only as wide as its own word
+    xminimum 0
+    xpadding 0
+style settings_tab_button_text is navigation_button_text
+style settings_tab_button_text:
+    size 30
 
 style game_menu_outer_frame is empty
 style game_menu_navigation_frame is empty

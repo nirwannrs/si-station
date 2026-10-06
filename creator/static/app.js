@@ -498,7 +498,10 @@ const SECTIONS = [
     { t: "custom", render: presetButtons },
     { t: "group", k: "display", label: "How it looks", fields: [
       { t: "select", k: "mode", label: "Presentation", none: false, default: "visual", redraw: true,
-        options: () => [["visual", "Visual: backgrounds, character sprites and a text box"], ["text", "Text only: a scrolling story, no pictures"]] },
+        options: () => [["visual", "Visual: backgrounds, character sprites and a text box"], ["text", "Text only: a scrolling story, no character sprites"]] },
+      { t: "asset", k: "background", label: "Background picture for the whole card (optional)", path: (d, ext) => `assets/bg/card${ext}`,
+        help: visual() ? "Shown wherever a place has no picture of its own. Give a place its own under Locations."
+          : "Shown behind the story, darkened so the text stays easy to read. Leave empty for plain black. A place can have its own picture under Locations, which is used while the player is there." },
     ] },
     { t: "group", k: "rules", label: "Systems", fields: [
       ...[["inventory", "Inventory", "Items the player and characters carry."], ["equipment", "Equipment", "Wearing and wielding items. Needs inventory."],
@@ -561,10 +564,13 @@ const SECTIONS = [
       { t: "text", k: "name", label: "Name", feeds: "id" },
       { t: "text", k: "id", label: "Id" },
       { t: "color", k: "color", label: "Name colour" },
-      { t: "area", k: "description", label: "Who they are", rows: 3, help: "Background and their part in the story." },
-      { t: "area", k: "personality", label: "Personality", rows: 2 },
-      { t: "area", k: "appearance", label: "Appearance", rows: 2, help: "What they look like. Later this also drives sprite generation." },
-      { t: "area", k: "dialogue_examples", label: "How they talk", rows: 2, help: "A line or two in their voice." },
+      { t: "area", k: "description", label: "Who they are", rows: 3, help: "The player can read this: it is shown under the character's name in the game's People list, and it is given to the AI. Keep it to what the player may know." },
+      { t: "group", k: "__ai", label: "For the AI only", flat: true, help: "Given to the AI so it can play the character. None of this is shown anywhere in the game.", fields: [
+        { t: "area", k: "personality", label: "Personality", rows: 2 },
+        { t: "area", k: "appearance", label: "Appearance", rows: 2, help: "What they look like. Later this also drives sprite generation." },
+        { t: "area", k: "dialogue_examples", label: "How they talk", rows: 2, help: "A line or two in their voice." },
+        { t: "area", k: "ai_notes", label: "Extra notes", rows: 3, help: "Anything else the AI needs that the player should not read: secrets, motives, their part in the plot, what they would never do." },
+      ] },
       { t: "select", k: "location", label: "Where they are at the start", none: "(off the map until the story brings them in)", options: O.locations, when: () => (card.locations || []).length },
       { t: "number", k: "xp_reward", label: "Experience for beating them in a fight", when: () => systemBattle() && has("levels") },
       { t: "sprites", k: "sprites", label: "Sprites", help: "One image per expression. \"neutral\" is used when no other fits. Without sprites the character shows as a name card.", when: visual },
@@ -572,7 +578,8 @@ const SECTIONS = [
     ] },
   ] },
 
-  { id: "persona", title: "Player", intro: "The player describes themselves in the game. These are the defaults, and what they start with.", fields: () => [
+  { id: "persona", title: "Player", intro: "The player describes themselves in the game, on its Persona screen. This is who they are when they have not: the card's default, and what they start with.", fields: () => [
+    { t: "custom", render: clearPlayerButtons },
     { t: "group", k: "default_persona", label: "Default player character", fields: [
       { t: "text", k: "name", label: "Name", placeholder: "Traveler" },
       { t: "area", k: "description", label: "Who they are", rows: 2 },
@@ -623,7 +630,9 @@ const SECTIONS = [
       { t: "text", k: "name", label: "Name", feeds: "id" },
       { t: "text", k: "id", label: "Id" },
       { t: "area", k: "description", label: "Description", rows: 2 },
-      { t: "asset", k: "background", label: "Background picture", when: visual, path: (l, ext) => `assets/bg/${l.id || "location"}${ext}` },
+      { t: "asset", k: "background", label: "Background picture (optional)", path: (l, ext) => `assets/bg/${l.id || "location"}${ext}`,
+        help: visual() ? "Shown while the player is here. Without one, the card's own background picture is used, if it has one."
+          : "Shown behind the story, darkened, while the player is here. Without one, the card's own background picture is used, if it has one." },
       { t: "bool", k: "hidden", label: "Hidden at the start", redraw: false,
         help: "Not on the player's map until the story reveals it: they are told of it, find the way, or are taken there. Where the player starts is never hidden." },
       { t: "checks", k: "connections", label: "Leads to", options: (l) => O.locations().filter(([id]) => id !== l.id), empty: "Add another location to connect this one to." },
@@ -706,6 +715,25 @@ function presetButtons() {
   return el("div", { class: "notice" }, el("p", {}, "Start from a preset, then adjust anything below. ",
     el("b", {}, "Casual"), " tracks only relationships, for slice-of-life stories. ", el("b", {}, "Classic RPG"), " adds health, mana, stamina, levels, skills, money and turn-based fights."),
     el("div", { class: "row" }, apply("casual", "Casual"), apply("rpg", "Classic RPG")));
+}
+
+// Empties the default player character in one go, after asking. Who they are and what they start
+// with are cleared separately, since a card usually wants to keep one of the two.
+function clearPlayerButtons() {
+  const persona = card.default_persona || {};
+  const about = ["name", "description", "appearance"].filter((key) => persona[key]);
+  const kit = persona.start && Object.keys(persona.start).length > 0;
+  const clear = (question, act) => () => {
+    if (!confirm(question)) return;
+    act(card.default_persona || (card.default_persona = {}));
+    changed(true);
+  };
+  return el("div", { class: "row clear-row" },
+    el("button", { type: "button", class: "danger", text: "Clear the player's info", disabled: !about.length,
+      onclick: clear("Clear the default player's name, description and appearance?\n\nThis cannot be undone. What they start with is kept.", (p) => { for (const key of ["name", "description", "appearance"]) delete p[key]; }) }),
+    el("button", { type: "button", class: "danger", text: "Clear what they start with", disabled: !kit,
+      onclick: clear("Clear everything the player starts with (stats, money, items, equipment, skills)?\n\nThis cannot be undone. Their name, description and appearance are kept.", (p) => { delete p.start; }) }),
+    el("span", { class: "muted small", text: about.length || kit ? "Each asks before it clears anything." : "There is nothing to clear." }));
 }
 
 // Adds a SillyTavern lorebook's entries to the open card. The server only converts the file; the
@@ -1103,7 +1131,7 @@ function renderSidebar() {
   document.querySelector(".topbar h1").textContent = card.meta.title || "Untitled card";
 }
 
-async function openEditor(project, wanted) {
+async function openEditor(project, wanted, entry) {
   if (project !== pid) {
     await flush();
     presetId = null; preset = null;
@@ -1130,6 +1158,8 @@ async function openEditor(project, wanted) {
     showProblems();
   }
   section = SECTIONS.some((s) => s.id === wanted) ? wanted : "info";
+  // A link can name one entry of the page's list to show unfolded, by position: #/card/ID/characters/1
+  if (entry !== undefined && /^\d+$/.test(entry)) openItems.add(`${section}/${section}/${entry}`);
   document.querySelector(".main").scrollTop = 0;
   renderSection();
 }
@@ -1194,7 +1224,7 @@ async function openHome() {
 async function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   try {
-    if (parts[0] === "card" && parts[1]) await openEditor(parts[1], parts[2]);
+    if (parts[0] === "card" && parts[1]) await openEditor(parts[1], parts[2], parts[3]);
     else if (parts[0] === "preset" && parts[1]) await openPreset(parts[1], parts[2], parts[3], parts[4]);
     else await openHome();
   } catch (error) {
