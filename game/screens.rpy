@@ -345,6 +345,9 @@ screen navigation():
 
         if main_menu:
 
+            if creator_available():
+                textbutton _("Card creator") action Function(open_creator)
+
             textbutton _("Eject card") action Function(eject_card)
 
         if renpy.variant("pc"):

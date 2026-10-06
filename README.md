@@ -15,11 +15,28 @@ It has three parts, all in this repository:
 
 ## Playing
 
-1. Install the Ren'Py SDK (8.5 or later) and open this folder as a project in its launcher.
-2. Launch it, choose a card, then open **Models** and pick a provider, enter your API key and
+1. Download the zip for your system from the [Releases](../../releases) page and unzip it.
+   Nothing else needs installing.
+   - **Windows:** run `SIStation.exe`.
+   - **macOS:** open `SIStation.app`. The app is not signed with an Apple developer certificate,
+     so the first time macOS will refuse to open it: right-click (or Control-click) the app,
+     choose **Open**, then **Open** again. After that it opens normally.
+   - **Linux:** run `SIStation.sh`.
+2. Choose a card, then open **Menu > Settings > Models**, pick a provider, enter your API key and
    choose a model. Anthropic, OpenRouter, Nano-GPT, any OpenAI-compatible address and local
    models are supported. A second, cheaper model can be set for small background tasks.
 3. Press **Start**.
+
+The card creator comes with the game: press **Card creator** on the main menu and it opens in
+your browser. To go straight to it, start `SI-Station Creator.bat` (Windows) or
+`si-station-creator` (Linux) instead of the game.
+
+Your own cards and presets are kept outside the game's folder, so a newer download never
+touches them: `%APPDATA%\SI-Station` on Windows, `~/Library/Application Support/SI-Station` on
+macOS, `~/.local/share/si-station` on Linux.
+
+To run from source instead, install the Ren'Py SDK (8.5 or later) and open this folder as a
+project in its launcher. Cards and presets are then the `cards` and `presets` folders here.
 
 Two sample cards are included: *The Rusty Lantern*, a full RPG with stats, skills, levels and
 turn-based fights, and *Quiet Hours*, a slice-of-life card that tracks nothing but friendships.

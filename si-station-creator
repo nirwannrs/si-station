@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts SI-Station straight into the card creator. Keep this file next to SIStation.sh.
+# (It has no .sh ending on purpose; see game/options.rpy.)
+SI_STATION_CREATOR=1 exec "$(dirname "$0")/SIStation.sh" "$@"

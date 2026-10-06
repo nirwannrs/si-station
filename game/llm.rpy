@@ -317,7 +317,7 @@ init python:
     preset_cache = {}
 
     def preset_folder():
-        return os.path.join(config.basedir, "presets")
+        return os.path.join(data_dir(), "presets")
 
     def read_preset(name):
         """One file from the presets folder, read again whenever it changes on disk, so a preset

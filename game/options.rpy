@@ -178,6 +178,32 @@ init python:
 
     ## Classify files as None to exclude them from the built distributions.
 
+    ## What a download contains: the game, the two sample cards, the game's own preset, and the
+    ## card creator, which the game runs itself (see creator.rpy). Everything else in the project
+    ## is for working on it. The first pattern a file matches decides.
+    build.classify('cards/rusty_lantern/**', 'all')
+    build.classify('cards/quiet_cafe/**', 'all')
+    build.classify('cards/**', None)                    ## cards being made are their maker's own
+    build.classify('presets/default.preset.json', 'all')
+    build.classify('presets/**', None)
+    build.classify('**/__pycache__/**', None)
+    build.classify('**.pyc', None)
+    build.classify('creator/**', 'all')
+    build.classify('spec/**', 'all')                    ## the card format, which the creator's MCP server hands out
+    build.classify('tests/**', None)
+    build.classify('tools/**', None)
+    build.classify('exports/**', None)
+    build.classify('samples/**', None)
+    build.classify('game/saves/**', None)
+    build.classify('game/cache/**', None)
+    build.classify('*.txt', None)                       ## log.txt, traceback.txt and the like
+    build.classify('.*', None)
+    build.classify('SI-Station Creator.bat', 'windows')
+    build.classify('si-station-creator', 'linux')       ## no .sh ending: Ren'Py leaves shell scripts in the project folder out of a build
+    build.executable('si-station-creator')
+    build.documentation('README.md')
+    build.documentation('LICENSE')
+
     build.classify('**~', None)
     build.classify('**.bak', None)
     build.classify('**/.**', None)

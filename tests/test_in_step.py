@@ -239,6 +239,31 @@ class TogglesTest(unittest.TestCase):
         self.assertIn("def flip(target, key, default, one=True, other=False):", read("game", "llm.rpy"))
 
 
+class ReleaseTest(unittest.TestCase):
+    def test_a_download_carries_the_game_and_creator_and_nothing_personal(self):
+        options = read("game", "options.rpy")
+        rules = re.findall(r"build\.classify\('([^']+)', ('?\w+'?)\)", options)
+        order = [pattern for pattern, where in rules]
+        for shipped in ("cards/rusty_lantern/**", "cards/quiet_cafe/**", "presets/default.preset.json", "creator/**", "spec/**"):
+            self.assertIn((shipped, "'all'"), rules)
+        for kept_out in ("cards/**", "presets/**", "tests/**", "tools/**", "exports/**", "game/saves/**"):
+            self.assertIn((kept_out, "None"), rules)
+        # The first pattern a file matches decides, so the samples must come before the rule that keeps other cards out.
+        self.assertLess(order.index("cards/rusty_lantern/**"), order.index("cards/**"))
+        self.assertLess(order.index("presets/default.preset.json"), order.index("presets/**"))
+        # The launchers start the executable the build makes, under the name the build gives it.
+        name = re.search(r'define build\.name = "(\w+)"', options).group(1)
+        self.assertIn("%s.exe" % name, read("SI-Station Creator.bat"))
+        self.assertIn("%s.sh" % name, read("si-station-creator"))
+        self.assertTrue(os.access(os.path.join(ROOT, "si-station-creator"), os.X_OK))
+        for launcher in ("SI-Station Creator.bat", "si-station-creator"):
+            self.assertIn("SI_STATION_CREATOR=1", read(launcher))
+            self.assertIn("build.classify('%s'" % launcher, options)
+        workflow = read(".github", "workflows", "release.yml")
+        self.assertIn("--package pc --package mac", workflow)
+        self.assertIn("unittest discover tests", workflow)
+
+
 class ButtonFunctionsTest(unittest.TestCase):
     def test_functions_run_by_buttons_return_nothing(self):
         """In Ren'Py, when a button runs Function(f) and f returns a value, that value closes the

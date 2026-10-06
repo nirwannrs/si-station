@@ -1,0 +1,60 @@
+# Builds the downloads players use: one zip for Windows and Linux, one for macOS.
+#
+# Push a tag such as v1.2.0 and this runs the tests, builds both packages with the Ren'Py SDK and
+# attaches them to a GitHub Release of that name. A tag with a hyphen, such as v1.2.0-beta.1, is
+# published as a pre-release. It can also be started by hand from the Actions
+# tab, in which case the packages are kept with the run instead of being released.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RENPY: "8.5.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the tests
+        run: python3 -m unittest discover tests
+
+      - name: Use the tag as the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: sed -i "s/^define config.version = .*/define config.version = \"${GITHUB_REF_NAME#v}\"/" game/options.rpy
+
+      # The SDK and the packages are kept outside the project folder, or the build would pack them into the game.
+      - name: Get the Ren'Py SDK
+        run: |
+          curl -sSLf -o "$RUNNER_TEMP/renpy.tar.bz2" "https://www.renpy.org/dl/${RENPY}/renpy-${RENPY}-sdk.tar.bz2"
+          tar -xjf "$RUNNER_TEMP/renpy.tar.bz2" -C "$RUNNER_TEMP"
+
+      - name: Build the packages
+        run: |
+          "$RUNNER_TEMP/renpy-${RENPY}-sdk/renpy.sh" "$RUNNER_TEMP/renpy-${RENPY}-sdk/launcher" distribute "$GITHUB_WORKSPACE" \
+            --destination "$RUNNER_TEMP/dists" --package pc --package mac --no-update
+          ls -la "$RUNNER_TEMP/dists"
+
+      - name: Keep the packages with this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: si-station
+          path: ${{ runner.temp }}/dists/*.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a hyphen in it (v1.0.0-beta.1) is published as a pre-release.
+          case "$GITHUB_REF_NAME" in *-*) EARLY="--prerelease" ;; *) EARLY="" ;; esac
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dists/*.zip \
+            --title "SI-Station ${GITHUB_REF_NAME#v}" --generate-notes $EARLY

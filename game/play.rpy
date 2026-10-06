@@ -18,8 +18,50 @@ init python:
     from aigame import card as aig_card
     from aigame import state as aig_state
 
+    ## Where the player's own things are kept: their cards, their presets, what the creator exports.
+    ## Run from the project's source, that is the project folder itself, so a card being made is
+    ## played as it is. A downloaded copy of the game may sit somewhere it cannot write to (inside
+    ## a Mac app, under Program Files), so there it is a folder of the player's own, which also
+    ## means replacing the game with a newer download never touches their cards.
+
+    def data_dir():
+        forced = os.environ.get("SI_STATION_DATA")          # for a portable copy, or for trying a build without touching real data
+        if forced:
+            return forced
+        if config.developer:
+            return config.basedir
+        home = os.path.expanduser("~")
+        if renpy.android or renpy.ios or renpy.emscripten:
+            return config.savedir
+        if renpy.windows:
+            return os.path.join(os.environ.get("APPDATA") or home, "SI-Station")
+        if renpy.macintosh:
+            return os.path.join(home, "Library", "Application Support", "SI-Station")
+        return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share"), "si-station")
+
     def cards_dir():
-        return os.path.join(config.basedir, "cards")
+        return os.path.join(data_dir(), "cards")
+
+    def seed_data():
+        """In a downloaded copy: puts the sample cards that come with the game into the player's
+        folder the first time, and the game's own preset every time, so it follows the version in use."""
+        import shutil
+        if os.path.abspath(data_dir()) == os.path.abspath(config.basedir):
+            return
+        try:
+            for folder in ("cards", "presets"):
+                if not os.path.isdir(os.path.join(data_dir(), folder)):
+                    os.makedirs(os.path.join(data_dir(), folder))
+            shipped = os.path.join(config.basedir, "cards")
+            for name in sorted(os.listdir(shipped)) if os.path.isdir(shipped) else []:
+                source, target = os.path.join(shipped, name), os.path.join(cards_dir(), name)
+                if os.path.isfile(os.path.join(source, "card.json")) and not os.path.exists(target):
+                    shutil.copytree(source, target)
+            shutil.copyfile(os.path.join(config.basedir, "presets", "default.preset.json"), os.path.join(data_dir(), "presets", "default.preset.json"))
+        except (IOError, OSError):
+            pass        # the insert-card screen says where cards are looked for, which is enough to act on
+
+    config.start_callbacks.append(seed_data)
 
     def current_card():
         return aig_card.get_card(os.path.join(cards_dir(), store.card_name))

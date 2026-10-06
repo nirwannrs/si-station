@@ -24,6 +24,10 @@ screen station_logo():
 
 ## Ren'Py runs this once at launch, before the main menu.
 label splashscreen:
+    ## Started by the "SI-Station Creator" launcher: only the creator, until the player chooses to play.
+    if creator_only():
+        $ open_creator()
+        call screen creator_window
     show screen station_logo
     $ renpy.pause(2.6)
     hide screen station_logo
