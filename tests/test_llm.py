@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 from aigame import llm, prompt  # noqa: E402
 from aigame.actions import apply_actions  # noqa: E402
 from aigame.card import load_card  # noqa: E402
-from aigame.state import new_game  # noqa: E402
+from aigame.state import new_game, track  # noqa: E402
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 
@@ -714,6 +714,27 @@ class QuestJudgeTest(unittest.TestCase):
         del self.card.quests["missing_courier"]["stages"][1]["done_if"]         # leave this one to the story, as before
         apply_actions(self.card, self.state, [{"type": "quest_advance", "quest": "Missing_Courier"}, {"type": "quest_advance", "quest": "missing_courier"}])
         self.assertEqual(self.quest["stage"], 2)
+
+    def test_result_lines_a_model_made_up_are_not_story(self):
+        story, actions = prompt.parse_narration("[Engine results]\n- done: Ash leaves Stable and goes to Common Room.\n\nYou step back into the warmth.\n- She nods.")
+        self.assertEqual(story, "You step back into the warmth.\n- She nods.")
+
+    def test_the_narrator_is_briefed_on_who_is_in_the_scene(self):
+        apply_actions(self.card, self.state, [{"type": "move", "location": "stable"}], by_player=True)
+        track(self.card, self.state, [{"id": "tobin", "location": "here", "note": "hiding a letter"}, {"id": "mira", "note": "behind the bar"}])
+        self.state["scene"] = prompt.parse_scene('{"scene": "Tobin is  hiding a letter\\nfrom Traveler."}')
+        brief = prompt.describe_scene(self.card, self.state)
+        self.assertIn("Place: Stable.\nWith Traveler: Tobin (hiding a letter).", brief)
+        self.assertIn("Not here: Marsh Bandit, not in the story yet; Mira Oakhand, at Common Room (behind the bar).", brief)
+        self.assertIn("What is going on: Tobin is hiding a letter from Traveler.", brief)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            preset = json.load(f)
+        system, messages = prompt.narrator_prompt(self.card, self.state, preset, "I wait.", [])
+        self.assertIn("[The scene right now]", messages[-1]["content"])          # in the part that changes, not the cached part
+        self.assertNotIn("[The scene right now]", system)
+        apply_actions(self.card, self.state, [{"type": "move", "location": "common_room"}], by_player=True)
+        self.assertNotIn("What is going on", prompt.describe_scene(self.card, self.state))   # a new place, a new scene
+        self.assertEqual(prompt.parse_scene("not json"), "")
 
     def test_the_judge_is_told_which_objectives_are_the_games(self):
         self.quest["stage"] = 1

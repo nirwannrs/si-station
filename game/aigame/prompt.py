@@ -370,6 +370,42 @@ def _unknown_places(card, state):
     return [l for l in place_list(card, state) if not knows_place(state, l["id"])]
 
 
+def describe_scene(card, state):
+    """A short briefing for the narrator on the scene as it stands: who is in it, who is not, and
+    what was going on. The facts are the engine's; the one line on what is happening is written by
+    the scene director after each reply. It exists so a model does not have to dig the cast of the
+    moment out of the stat sheets, and does not bring in someone who is in another room."""
+    me = state["actors"][PLAYER]
+    here = places(card, state).get(me["location"])
+    present, absent = [], []
+    for who, actor in sorted(state["actors"].items()):
+        if who == PLAYER:
+            continue
+        doing = " (%s)" % actor["note"] if actor.get("note") else ""
+        if is_away(card, actor):
+            absent.append("%s, away: %s" % (actor["name"], describe_states(actor)))
+        elif actor["location"] is not None and actor["location"] == me["location"]:
+            present.append(actor["name"] + doing)
+        elif actor["location"] is None and not actor.get("note"):
+            absent.append("%s, not in the story yet" % actor["name"])
+        else:
+            place = places(card, state).get(actor["location"])
+            absent.append("%s, %s%s" % (actor["name"], "at " + place["name"] if place else "off the map", doing))
+    lines = ["[The scene right now]"]
+    if here:
+        lines.append("Place: %s." % here["name"])
+    lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
+    if absent:
+        lines.append("Not here: %s." % "; ".join(absent))
+    if state.get("scene"):
+        lines.append("What is going on: %s" % state["scene"])
+    if card.characters:
+        lines.append("Only the people listed as with %s are in this scene. Nobody from \"Not here\" speaks or acts unless this reply shows them arriving, "
+                     "and nobody here is forgotten. An unnamed figure in the story so far is one of these characters when the description fits; "
+                     "do not turn them into someone else." % me["name"])
+    return "\n".join(lines)
+
+
 def describe_state(card, state, secrets=True):
     """secrets is False for helpers that speak for the player (their suggested replies, reading
     their intent), which must not be told about places the player has not discovered."""
@@ -531,7 +567,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
         "characters": lambda: describe_cast(card),
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
-        "state": lambda: describe_state(card, state),
+        "state": lambda: describe_scene(card, state) + "\n\n" + describe_state(card, state),
         "quests": lambda: describe_quests(card, state),
         "summary": lambda: "[Story so far]\n" + state["summary"] if state["summary"] else "",
         "action_protocol": lambda: action_protocol(card, record),
@@ -566,8 +602,15 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
 _ACTIONS_BLOCK = re.compile(r"<actions>(.*?)</actions>", re.DOTALL | re.IGNORECASE)
 
 
+# A model that copies the prompt's own layout into its reply: an "[Engine results]" heading and
+# result lines it made up. Left in, the player would read it, and the bookkeeper would take the
+# made-up line for something already recorded and record nothing.
+_ECHOED_RESULTS = re.compile(r"^[ \t]*(\[Engine results[^\]\n]*\]|- (done|REJECTED|UP TO YOU)\b[^\n]*)[ \t]*\n?", re.M)
+
+
 def parse_narration(text):
     """Splits a narrator reply into (story text, actions). A block cut off mid-way is dropped."""
+    text = _ECHOED_RESULTS.sub("", text)
     actions = []
     for block in _ACTIONS_BLOCK.findall(text):
         parsed = extract_json(block)
@@ -668,7 +711,7 @@ def _looks(character):
 
 def director_prompt(card, state, paragraphs):
     system = """\
-You are the stage director of a visual novel. The narrator's latest text is given as numbered paragraphs. Work out two things from it.
+You are the stage director of a visual novel. The narrator's latest text is given as numbered paragraphs. Work out four things from it.
 
 1. Who speaks. For each paragraph:
 - speaker: the id of the character whose spoken words make up the paragraph, or null when it is narration, description, or the player's own speech. A paragraph that is mostly one character talking, with a short "she says" around it, belongs to that character.
@@ -683,10 +726,13 @@ The text does not always use names. Work out who an unnamed person is ("a skinny
 
 3. Which hidden places the player just learned of. If a list of places the player does not know of is given, name the ids of any that this text shows or tells the player about: they are told it exists, see the way to it, or are taken there. A place that is merely near is not revealed.
 
+4. What is going on. Under "scene", one or two plain sentences on how things stand at the end of this text: who is with the player and doing what, and what is left hanging. Use names. It is a note for the narrator's next reply, so state facts from the text and add nothing.
+
 Reply with JSON only:
 {"paragraphs": [{"n": 1, "speaker": "some_id", "expression": "neutral"}, {"n": 2, "speaker": null, "expression": null}],
  "whereabouts": [{"id": "some_id", "location": "here", "note": "..."}],
- "revealed": ["some_location_id"]}"""
+ "revealed": ["some_location_id"],
+ "scene": "..."}"""
     me = state["actors"][PLAYER]
     cast = "\n".join("- %s (id: %s). %sExpressions: %s. Before this text: %s" % (
         c["name"], c["id"], _looks(c), ", ".join(expressions_of(card, c["id"])), _whereabouts(card, state, c["id"])) for c in card.data.get("characters", []))
@@ -714,6 +760,12 @@ def parse_direction(text, card, count):
             known = expressions_of(card, speaker)
             direction[index] = {"speaker": speaker, "expression": expression if expression in known else known[0] if "neutral" not in known else "neutral"}
     return direction
+
+
+def parse_scene(text):
+    """The director's line on what is going on, or "" when it gave none."""
+    scene = (extract_json(text) or {}).get("scene")
+    return " ".join(scene.split())[:400] if isinstance(scene, str) else ""
 
 
 def parse_revealed(text, card, state=None):

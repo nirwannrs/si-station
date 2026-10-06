@@ -489,6 +489,8 @@ init python:
         except aig_llm.LLMError:
             reply = ""
         aig_state.track(card, state, aig_prompt.parse_whereabouts(reply, card, state))
+        ## A line on how things stand, which the narrator is given back next turn. See describe_scene.
+        state["scene"] = aig_prompt.parse_scene(reply)
         ## Places the text showed the player go on their map. The narrator hears of it next turn.
         for place in aig_state.reveal(card, state, aig_prompt.parse_revealed(reply, card, state)):
             state["pending_results"].append({"ok": True, "message": "The map now shows %s." % place})

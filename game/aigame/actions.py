@@ -364,6 +364,7 @@ def _move(card, state, a):
         left_place(state, here["id"])
     if wid == PLAYER:
         reveal(card, state, [lid])      # being taken somewhere puts it on the map
+        state["scene"] = ""             # what was going on belonged to the place they left
     if here:
         # Naming where they left lets the narrator weigh what leaving means, and send them back if someone would have stopped them.
         return "%s leaves %s and goes to %s." % (who["name"], here["name"], location["name"])
