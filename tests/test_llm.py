@@ -352,10 +352,17 @@ class LeavingTest(unittest.TestCase):
         self.assertEqual(apply_actions(card, state, [{"type": "lock_travel", "reason": "The exam has begun and the captains are watching."}])[0]["message"],
                          "Traveler can no longer leave: The exam has begun and the captains are watching.")
         tried = apply_actions(card, state, [{"type": "move", "location": "stable"}], by_player=True)[0]
-        self.assertEqual((tried["ok"], tried["message"]), (False, "Traveler cannot leave right now: The exam has begun and the captains are watching."))
+        # Asked for after play: a teleporter, or someone who simply will not stay, is not stopped by the
+        # game. The map stays closed to walking, and the attempt is handed to the story with why they are held.
+        self.assertIsNone(tried["ok"])
+        self.assertIn("is held where they are (The exam has begun and the captains are watching) and tries to go to Stable all the same", tried["message"])
         self.assertEqual(state["actors"]["player"]["location"], "common_room")
         self.assertIn("Travel: LOCKED for the player (The exam has begun and the captains are watching.)", prompt.describe_state(card, state))
-        self.assertTrue(apply_actions(card, state, [{"type": "move", "who": "player", "location": "cellar"}])[0]["ok"])     # the story can still move them
+        moved = apply_actions(card, state, [{"type": "move", "who": "player", "location": "cellar"}])[0]                    # the story can still move them
+        self.assertTrue(moved["ok"])
+        self.assertIsNone(state["travel_lock"])                                                                             # and what held them there holds them no longer
+        self.assertIn("Nothing holds them there any more.", moved["message"])
+        apply_actions(card, state, [{"type": "lock_travel", "reason": "The exam has begun and the captains are watching."}])
         self.assertTrue(apply_actions(card, state, [{"type": "move", "who": "tobin", "location": "common_room"}], by_player=False)[0]["ok"])
         self.assertTrue(apply_actions(card, state, [{"type": "unlock_travel"}])[0]["ok"])
         self.assertFalse(apply_actions(card, state, [{"type": "unlock_travel"}])[0]["ok"])
@@ -602,8 +609,17 @@ class HiddenPlacesTest(unittest.TestCase):
     def test_hidden_places_start_off_the_map(self):
         self.assertEqual(self.state["revealed"], ["common_room", "stable"])
         tried = self.act(by_player=True, type="move", location="cellar")
-        self.assertEqual((tried["ok"], tried["message"]), (False, "Traveler does not know of any such place to go to."))
-        self.assertFalse(self.act(by_player=True, type="move", location="Cellar")["ok"])            # nor by its name
+        # Seen in play: the player was being taken through a portal to a hideout that was off their map,
+        # and was flatly refused. They cannot walk there alone, but the story may take them: it is left to the story.
+        self.assertIsNone(tried["ok"])
+        self.assertIn("means to go to Cellar, which is not on their map", tried["message"])
+        self.assertEqual(self.state["actors"]["player"]["location"], "common_room")                  # the game itself moves nobody
+        self.assertEqual(self.state["revealed"], ["common_room", "stable"])                          # and the map is not filled in by asking
+        self.assertIsNone(self.act(by_player=True, type="move", location="Cellar")["ok"])            # the same by its name
+        self.assertFalse(self.act(by_player=True, type="move", location="atlantis")["ok"])           # a place that does not exist is still refused
+        self.act(type="move", who="player", location="cellar")                                       # the story takes them there:
+        self.assertIn("cellar", self.state["revealed"])                                              # now it is on the map
+        self.act(type="move", who="player", location="common_room")
         self.assertTrue(self.act(by_player=True, type="move", location="stable")["ok"])
 
     def test_narrator_is_told_and_can_reveal(self):

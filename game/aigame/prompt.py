@@ -295,11 +295,25 @@ def header_start(card, state):
     return fill(card, state, _bracketed(line)) if line else ""
 
 
+_HEADER_LINE = re.compile(r"^[ \t]*(\[[^\n]{6,400}\])[ \t]*$", re.M)
+_UNFILLED = re.compile(r"HH:MM|DayOfWeek|WeatherEmoji|YYYY|Month DD|Day #")
+
+
 def split_header(text):
-    """(the time and place line or None, the story without it)."""
+    """(the time and place line or None, the story without it).
+
+    Some models write the form out first, placeholders and all, and then the real line after a
+    remark about correcting it. So if a filled-in line follows close behind an unfilled one, that
+    is the line, and what came before it is dropped with it."""
     found = _HEADER.match(text)
     if not found or not ("|" in found.group(1) or re.search(r"\d", found.group(1))):
         return None, text
+    if _UNFILLED.search(found.group(1)):
+        later = [m for m in _HEADER_LINE.finditer(text[:found.end() + 700], found.end()) if "|" in m.group(1) and not _UNFILLED.search(m.group(1))]
+        if later:
+            found = later[0]
+        else:
+            return None, text[found.end():].lstrip("\n")       # only the form itself: no line this turn
     return " ".join(found.group(1).split()), text[found.end():].lstrip("\n")
 
 

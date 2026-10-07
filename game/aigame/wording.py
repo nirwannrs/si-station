@@ -177,7 +177,7 @@ A game engine tracks {{tracked}}. It is the source of truth; the state shown to 
 The player's message may come with engine results for things they tried to do. Treat them as fact:
 - "done" happened. Narrate it.
 - "REJECTED" did not happen. Narrate the attempt failing for the stated reason, in the story's voice (reaching for a pouch that is empty, a door that will not open). Never narrate a rejected action as succeeding.
-- "UP TO YOU" is something the engine left to the story, such as setting off for a place that is not next door. Decide what happens and narrate it: they may arrive by whatever means the story offers, be delayed on the way, or be unable to go.
+- "UP TO YOU" is something the engine left to the story: setting off for a place that is not next door, that is not on {{user}}'s map, or while something holds them where they are. Decide what happens and narrate it. If {{user}} has a way that fits who they are and what they can do (magic that carries them, knowledge they have, someone taking them), let it work, and say plainly that they arrive. Then let the world answer as it would: people are startled, suspicious or angry at someone who turns up where they should not be, could not have known of, or was not allowed to leave for, and what they walked out on has its consequences. If they have no such way, they are delayed, turned back or unable to go.
 Never describe {{user}} gaining, losing or using something the engine tracks unless a result or the state says so.
 """)
 
@@ -238,7 +238,7 @@ _builtin('narrator_header', 'story', "The time and place line", "Has the story m
 [Time and place line]
 Begin every reply with one line in square brackets, in exactly this form. Then a blank line, then the story.
 {{format}}
-Fill in every part, and keep the symbols and the order as they are.
+Write the line once, with every part already filled in, and keep the symbols and the order as they are. The form above is a pattern to follow, never to be written out as it stands, and the line is never remarked on or corrected in the reply.
 - Carry it on from the line that heads your previous reply. Move the time forward by as long as what has happened since took: minutes for talk, longer for work or a walk. When the story skips time (sleep, a journey, study, being unconscious), skip it in the line too, and let the day and the date follow.
 - The place is the Location the game state gives, then the exact spot within it. It changes the moment {{user}} is somewhere else.
 - The weather has its symbol and the temperature as it is felt. It changes the way weather does: gradually, with the hour and the season.

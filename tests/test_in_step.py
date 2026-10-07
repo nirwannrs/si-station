@@ -160,6 +160,10 @@ class EditablePromptsTest(unittest.TestCase):
         self.assertEqual(prompt.split_header("  " + line + "\nRain."), (line, "Rain."))
         for plain in ("Rain drums on the roof.", "[She laughs.]\n\nRain.", "\"[sic]\" he wrote."):
             self.assertEqual(prompt.split_header(plain), (None, plain))                                # a story that merely opens with a bracket is left alone
+        # Seen with a real model: the form written out first, then the real line after a remark.
+        drafted = prompt.DEFAULT_HEADER + "\n\nI need to fill this in properly, so:\n\n" + line + "\n\nRain drums on the roof."
+        self.assertEqual(prompt.split_header(drafted), (line, "Rain drums on the roof."))
+        self.assertEqual(prompt.split_header(prompt.DEFAULT_HEADER + "\n\nRain."), (None, "Rain."))   # the bare form is never shown as a line
         system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
         self.assertNotIn("[Time and place line]", system)                                             # only when it is switched on
         self.state["history"].append({"player": "I sit.", "results": [], "narration": "You sit.", "header": line})

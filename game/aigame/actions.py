@@ -75,16 +75,26 @@ def apply_action(card, state, action, by_player=False):
         stopped_by = blocked(card, state["actors"][PLAYER], NEEDS[action["type"]])
         if stopped_by:
             return {"action": action, "ok": False, "message": "%s cannot do that while %s." % (state["actors"][PLAYER]["name"], stopped_by.lower())}
-    if by_player and action["type"] == "move" and state.get("travel_lock") is not None:
-        return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])}
     if by_player and action["type"] == "move":
         try:
             wanted = _find(places(card, state), action.get("location"), "location")[0]
         except Rejected:
             wanted = None
+        # The player is never simply stopped from going somewhere real. What the map says is what they
+        # can do by walking: a place they are held in, a place that is not on their map and a place
+        # that is far off are all beyond that, but a teleporter, someone who knows more than they
+        # should, or someone with a guide may get there anyway. So these are neither applied nor
+        # refused: ok is None, which hands the attempt to the story model (the player is not shown
+        # it), and the story decides whether it works and what it costs them.
+        who = state["actors"][PLAYER]["name"]
+        if wanted is not None and state.get("travel_lock") is not None:
+            return {"action": action, "ok": None, "message": "%s is held where they are (%s) and tries to go to %s all the same. Whether they manage it, by what means, and what comes of it is for the story to decide." % (
+                who, state["travel_lock"].rstrip("."), places(card, state)[wanted]["name"])}
+        if wanted is None and state.get("travel_lock") is not None:
+            return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (who, state["travel_lock"])}
         if wanted is not None and not knows_place(state, wanted):
-            # Worded so as not to confirm the place exists.
-            return {"action": action, "ok": False, "message": "%s does not know of any such place to go to." % state["actors"][PLAYER]["name"]}
+            return {"action": action, "ok": None, "message": "%s means to go to %s, which is not on their map: they have not been shown it or the way there. Whether they get there, by what means, and what comes of it is for the story to decide." % (
+                who, places(card, state)[wanted]["name"])}
         player = state["actors"][PLAYER]
         here = places(card, state).get(player["location"])
         if wanted is not None and here and wanted != here["id"] and not _connected(here, places(card, state)[wanted]):
@@ -401,13 +411,19 @@ def _move(card, state, a):
     who["location"] = lid
     if here:
         left_place(state, here["id"])
+    freed = ""
     if wid == PLAYER:
         reveal(card, state, [lid])      # being taken somewhere puts it on the map
         state["scene"] = ""             # what was going on belonged to the place they left
+        if state.get("travel_lock") is not None:
+            # Whatever held them was holding them there. They are somewhere else now, so it holds them
+            # no longer; the story closes the map again if they are still not free (a prisoner being moved).
+            state["travel_lock"] = None
+            freed = " Nothing holds them there any more."
     if here:
         # Naming where they left lets the narrator weigh what leaving means, and send them back if someone would have stopped them.
-        return "%s leaves %s and goes to %s." % (who["name"], here["name"], location["name"])
-    return "%s goes to %s." % (who["name"], location["name"])
+        return "%s leaves %s and goes to %s.%s" % (who["name"], here["name"], location["name"], freed)
+    return "%s goes to %s.%s" % (who["name"], location["name"], freed)
 
 
 def _quest_start(card, state, a):
