@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "game"))
 
-from aigame import battle  # noqa: E402
+from aigame import battle, prompt  # noqa: E402
 from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
 from aigame.card import Card, CardError, check_card, import_card, list_cards, load_card, pack_card  # noqa: E402
 from aigame.state import describe_states, effective_stat, new_game, reconcile  # noqa: E402
@@ -276,6 +276,62 @@ class EngineTest(unittest.TestCase):
         self.assertEqual((self.me["money"], self.me["inventory"].get("healing_draught", 0)), (gold, draughts))
         apply_actions(self.card, self.state, [{"type": "change_money", "who": "player", "amount": 15}])
         self.assertEqual(self.me["money"], gold + 15)                  # it is only taken off once: this is new money
+
+    def test_the_most_someone_can_have_of_a_stat_can_grow_and_shrink(self):
+        self.do(type="change_stat", stat="hp", amount=-5)
+        self.assertIn("20/25", self.ok(type="change_stat_max", stat="hp", amount=5))        # grows, and what they have grows with it
+        self.do(type="change_stat", stat="hp", amount=100)
+        self.assertEqual(self.me["stats"]["hp"], 25)
+        self.assertIn("15/15", self.ok(type="change_stat_max", stat="hp", amount=-10))      # shrinks, and nothing stays above it
+        self.assertEqual(self.state["actors"]["mira"].get("max", {}).get("hp"), None)       # one person's growth is theirs alone
+        self.ok(type="change_stat_max", who="mira", stat="hp", amount=3)
+        self.rejected(type="change_stat_max", stat="hp", amount=0)
+        self.rejected(type="change_stat_max", stat="hp", amount="lots")
+        self.rejected(type="change_stat_max", stat="luck", amount=1)
+        self.ok(type="change_stat_max", stat="hp", amount=-1000)
+        self.assertEqual((self.me["stats"]["hp"], self.me["max"]["hp"]), (0, 0))            # never below the stat's floor
+
+    def test_a_character_can_have_their_own_maximum(self):
+        """Asked for after play: with one Mana limit for everyone, nobody could tell that 900 was all one character could hold."""
+        data = copy.deepcopy(self.card.data)
+        mira = next(c for c in data["characters"] if c["id"] == "mira")
+        mira.setdefault("start", {})["max"] = {"hp": 35, "mana": 4}
+        mira["start"].setdefault("stats", {})["hp"] = 30
+        card = Card(data, CARD_DIR)
+        self.assertEqual(check_card(data), [])
+        state = new_game(card)
+        her = state["actors"]["mira"]
+        self.assertEqual((her["stats"]["hp"], her["stats"]["mana"], her["max"]), (30, 4, {"hp": 35, "mana": 4}))     # no starting Mana given: she starts full
+        apply_actions(card, state, [{"type": "change_stat", "who": "mira", "stat": "hp", "amount": 100}, {"type": "change_stat", "who": "player", "stat": "hp", "amount": 100}])
+        self.assertEqual((her["stats"]["hp"], state["actors"]["player"]["stats"]["hp"]), (35, 20))                    # each up to their own
+        self.assertIn("Health (hp) 35/35, Stamina (stamina) 10/10, Mana (mana) 4/4", prompt.describe_state(card, state))
+        old = new_game(self.card)                                                                                      # a game begun before the card gave her one
+        old["actors"]["mira"]["stats"]["mana"] = 9
+        reconcile(card, old)
+        self.assertEqual((old["actors"]["mira"]["max"], old["actors"]["mira"]["stats"]["mana"]), ({"hp": 35, "mana": 4}, 4))
+        mira["start"]["min"] = {"hp": 5}                                                                              # and their own minimum
+        card = Card(data, CARD_DIR)
+        self.assertEqual(check_card(data), [])
+        state = new_game(card)
+        apply_actions(card, state, [{"type": "change_stat", "who": "mira", "stat": "hp", "amount": -100}, {"type": "change_stat_max", "who": "mira", "stat": "hp", "amount": -100}])
+        self.assertEqual((state["actors"]["mira"]["stats"]["hp"], state["actors"]["mira"]["max"]["hp"]), (5, 5))
+        reconcile(card, old)
+        self.assertEqual(old["actors"]["mira"]["min"], {"hp": 5})
+        mira["start"]["stats"]["hp"] = 50
+        mira["start"]["max"]["luck"] = 3
+        mira["start"]["min"] = {"hp": 40, "mana": 9, "luck": 1}
+        self.assertEqual(len(check_card(data)), 5)
+
+    def test_a_new_place_can_be_gone_to_in_the_same_breath(self):
+        """Seen in play: "There is no location called 'royal_gardens'", then "A new place: Royal Gardens"."""
+        told = apply_actions(self.card, self.state, [{"type": "move", "who": "player", "location": "royal_gardens"},
+                                                     {"type": "move", "who": "mira", "location": "Royal gardens"},
+                                                     {"type": "create_location", "name": "Royal Gardens", "description": "Clipped hedges."}])
+        self.assertEqual([r["ok"] for r in told], [True, True, True])
+        self.assertTrue(told[0]["message"].startswith("A new place: Royal Gardens"))
+        self.assertEqual((self.me["location"], self.state["actors"]["mira"]["location"]), ("gen_royal_gardens", "gen_royal_gardens"))
+        self.ok(type="add_item", item="Healing-Draught")                                    # the same leniency for anything named
+        self.rejected(type="move", location="royal")                                        # but not a guess at half a name
 
     def test_only_the_very_reward_is_held_back(self):
         """Seen with real models: a merchant's gift of 40 gold, soon after a 15 gold reward, must arrive whole."""

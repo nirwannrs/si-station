@@ -12,6 +12,14 @@ def _new_actor(card, name, start, location):
     start = start or {}
     stats = dict((s["id"], s["default"]) for s in card.data["rules"]["stats"])
     stats.update(start.get("stats", {}))
+    own_max = dict((stat, most) for stat, most in start.get("max", {}).items() if stat in stats)
+    for stat, most in own_max.items():
+        if stat not in start.get("stats", {}):
+            stats[stat] = most                      # with no starting value given, they start full
+        stats[stat] = min(stats[stat], most)
+    own_min = dict((stat, low) for stat, low in start.get("min", {}).items() if stat in stats)
+    for stat, low in own_min.items():
+        stats[stat] = max(stats[stat], low)
     return {
         "name": name,
         "stats": stats,
@@ -21,8 +29,10 @@ def _new_actor(card, name, start, location):
         "location": location,
         "level": start.get("level", 1),
         "xp": 0,
-        # stat id -> this actor's own maximum once levelling has raised it above the card's
-        "max": {},
+        # stat id -> this actor's own maximum: what the card gives them, raised by levels and growth since
+        "max": own_max,
+        # stat id -> this actor's own minimum, where the card gives them one
+        "min": own_min,
         # skill id -> {"unlocked", "unlock_level"}; a locked skill is known about but cannot be used yet
         "skills": dict((s["skill"], {"unlocked": not s.get("locked", False), "unlock_level": s.get("unlock_level")})
                        for s in start.get("skills", [])),
@@ -153,8 +163,13 @@ def stat_max(card, actor, stat_id):
     return actor.get("max", {}).get(stat_id, card.stats[stat_id].get("max"))
 
 
+def stat_min(card, actor, stat_id):
+    """The least the stat can be for this actor."""
+    return actor.get("min", {}).get(stat_id, card.stats[stat_id].get("min", 0))
+
+
 def clamp_stat(card, actor, stat_id, value):
-    value = max(value, card.stats[stat_id].get("min", 0))
+    value = max(value, stat_min(card, actor, stat_id))
     ceiling = stat_max(card, actor, stat_id)
     return value if ceiling is None else min(value, ceiling)
 
@@ -203,6 +218,15 @@ def reconcile(card, state):
         for skill_id in [s for s in actor["skills"] if s not in card.skills]:
             del actor["skills"][skill_id]
         actor["max"] = dict((s, v) for s, v in actor["max"].items() if s in card.stats)
+        for stat, most in starting["max"].items():
+            # A maximum the card has given them since this game began. One the game has already
+            # raised or lowered for them stays as it is.
+            if stat not in actor["max"]:
+                actor["max"][stat] = most
+                actor["stats"][stat] = min(actor["stats"].get(stat, most), most)
+        actor["min"] = dict(starting["min"])                 # the card's alone; nothing in play changes it
+        for stat in actor["min"]:
+            actor["stats"][stat] = clamp_stat(card, actor, stat, actor["stats"].get(stat, card.stats[stat]["default"]))
         for item_id in [i for i in actor["inventory"] if get_item(card, state, i) is None]:
             del actor["inventory"][item_id]
             notes.append("%s lost an item this card no longer has (%s)." % (actor["name"], item_id))

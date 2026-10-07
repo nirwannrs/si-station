@@ -832,7 +832,7 @@ init python:
             ## story model is told who they are in this turn's message, which is kept as it was sent.
             entering = aig_prompt.arrivals(card, state, text)
             stage = "write the story"
-            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper)
+            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper, check=params().get("check_first", False))
             reply, cut_short, broke_off = once("reply", lambda: (llm_call("main", system, messages, story_sampling()), runtime.cut_short, runtime.reply_dropped))
             runtime.cut_short = cut_short
             narration, world_actions = aig_prompt.parse_narration(reply)
@@ -1395,8 +1395,11 @@ screen turn_text(turn=None):
         spacing 12
         if turn:
             text rich("> " + turn["player"]) color "#aaaaaa"
-        for speaker, expression, paragraph in scene_lines(turn):
-            if speaker:
+        ## A character's name heads their part once: what they do and what they say after it are
+        ## theirs until someone else, or the narration, takes over.
+        $ lines = scene_lines(turn)
+        for n, (speaker, expression, paragraph) in enumerate(lines):
+            if speaker and (n == 0 or lines[n - 1][0] != speaker):
                 text esc(current_card().characters[speaker]["name"]) color speaker_color(speaker) size 26
             text rich(paragraph)
         ## A result the engine left to the story (ok is None) is a note for the narrator, not news for the player.
@@ -1821,6 +1824,15 @@ screen parameters():
                     style_prefix "check"
                     xsize 1100
                     textbutton _("Use a bookkeeper") action Function(flip, chosen, "bookkeeper", True) selected chosen.get("bookkeeper", True)
+
+            vbox:
+                spacing 6
+                label _("Check before writing")
+                text _("For a story model that thinks before it answers. It is given a short checklist to go through in its thinking first: does the reply fit the game state and this turn's results, does it follow the card's and the preset's instructions, is it laid out right. Replies take a little longer and cost a little more. A model that cannot think privately writes the check out instead, which the game removes, so leave this off for those. The checklist can be reworded in the preset (Check before writing).") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Have the story model check its reply first") action Function(flip, chosen, "check_first", False, True, False) selected chosen.get("check_first", False)
 
             vbox:
                 spacing 6

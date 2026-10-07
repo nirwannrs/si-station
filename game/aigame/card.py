@@ -394,6 +394,19 @@ def check_card(data):
         for stat, value in start.get("stats", {}).items():
             if stat not in stat_ids or not _is_num(value):
                 p.append("%s start has unknown stat %r" % (where, stat))
+        own, least = start.get("max", {}), start.get("min", {})
+        for stat, most in (own.items() if isinstance(own, dict) else []):
+            if stat not in stat_ids or not _is_num(most):
+                p.append("%s start has a maximum for unknown stat %r" % (where, stat))
+            elif _is_num(start.get("stats", {}).get(stat)) and start["stats"][stat] > most:
+                p.append("%s starts with more %s (%s) than their own maximum (%s)" % (where, stat, start["stats"][stat], most))
+        for stat, low in (least.items() if isinstance(least, dict) else []):
+            if stat not in stat_ids or not _is_num(low):
+                p.append("%s start has a minimum for unknown stat %r" % (where, stat))
+            elif isinstance(own, dict) and _is_num(own.get(stat)) and low > own[stat]:
+                p.append("%s has a minimum for %s (%s) above their own maximum (%s)" % (where, stat, low, own[stat]))
+            elif _is_num(start.get("stats", {}).get(stat)) and start["stats"][stat] < low:
+                p.append("%s starts with less %s (%s) than their own minimum (%s)" % (where, stat, start["stats"][stat], low))
         for s in start.get("states", []):
             if not isinstance(s, dict) or not isinstance(s.get("state"), str) or not s["state"]:
                 p.append("%s start has a state with no name" % where)

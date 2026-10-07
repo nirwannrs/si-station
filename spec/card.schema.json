@@ -388,6 +388,8 @@
       "additionalProperties": false,
       "properties": {
         "stats": { "type": "object", "additionalProperties": { "type": "number" }, "description": "Stat id -> starting value. Missing stats use the rule default." },
+        "max": { "type": "object", "additionalProperties": { "type": "number" }, "description": "Stat id -> this character's own maximum, in place of the stat's shared one: their full Health, their full Mana pool. Rest restores a stat up to it, and growth raises it. Missing stats use the stat's own max. Set it wherever characters differ in how much they can hold." },
+        "min": { "type": "object", "additionalProperties": { "type": "number" }, "description": "Stat id -> this character's own minimum, in place of the stat's shared one. Missing stats use the stat's own min. Rarely needed." },
         "money": { "type": "number", "minimum": 0 },
         "level": { "type": "integer", "minimum": 1, "default": 1 },
         "states": {

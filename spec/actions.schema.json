@@ -140,6 +140,18 @@
             }
           },
           {
+            "description": "Lasting growth or loss: changes the most who can have of the stat, for that character only. A raise also raises what they have now. Fails for a stat with no maximum.",
+            "type": "object",
+            "required": ["type", "stat", "amount"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_stat_max" },
+              "who": { "$ref": "#/$defs/who" },
+              "stat": { "$ref": "#/$defs/id" },
+              "amount": { "type": "number" }
+            }
+          },
+          {
             "description": "Fails if the location is not connected to who's current one.",
             "type": "object",
             "required": ["type", "location"],

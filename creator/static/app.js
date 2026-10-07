@@ -146,7 +146,7 @@ const O = {
 function statHolders() {
   const rules = card.rules, maps = [], lists = [];
   if (rules.leveling) maps.push([rules.leveling, "gains"]);
-  for (const who of [...(card.characters || []), card.default_persona || {}]) if (who.start) maps.push([who.start, "stats"]);
+  for (const who of [...(card.characters || []), card.default_persona || {}]) if (who.start) maps.push([who.start, "stats"], [who.start, "max"], [who.start, "min"]);
   for (const quest of card.quests || []) if (quest.rewards) maps.push([quest.rewards, "stats"]);
   for (const skill of card.skills || []) { maps.push([skill, "cost"]); lists.push(skill); }
   for (const item of card.items || []) lists.push(item);
@@ -470,6 +470,10 @@ const loadout = (isCharacter) => ({ t: "group", k: "start", label: "Starting poi
   { t: "number", k: "money", label: card.rules.currency_name || "Gold", when: () => has("money") },
   { t: "map", k: "stats", label: "Stats", help: "Leave a box empty to use the stat's usual starting value.", options: O.stats,
     placeholder: (id) => String((card.rules.stats.find((s) => s.id === id) || {}).default ?? "") },
+  { t: "map", k: "max", label: "Their own maximums", help: "The most this character can have of a stat: their full Health, their whole Mana pool. Rest brings a stat back up to it. Leave a box empty to use the stat's usual maximum.", options: O.stats,
+    placeholder: (id) => String((card.rules.stats.find((s) => s.id === id) || {}).max ?? "no limit") },
+  { t: "map", k: "min", label: "Their own minimums", help: "The least this character can have of a stat. Rarely needed. Leave a box empty to use the stat's usual minimum.", options: O.stats,
+    placeholder: (id) => String((card.rules.stats.find((s) => s.id === id) || {}).min ?? 0) },
   { ...stacks("inventory", "Inventory"), when: () => has("inventory") },
   { t: "map", k: "equipment", label: "Wearing", when: () => has("equipment"), options: () => SLOTS.map((s) => [s, cap(s)]),
     pick: (slot) => (card.items || []).filter((i) => i.type === "equipment" && i.slot === slot).map((i) => [i.id, i.name || i.id]) },
@@ -969,7 +973,7 @@ function sectionText(entry, heading, message) {
 // It is built by the game's own code from this preset as it stands, saved or not.
 function turnPreview() {
   if (!previewCards.length) return alert("Make a card with no problems first; the preview is built from a real card.");
-  let provider = "openrouter", bookkeeper = true, json = "", unfolded = false;
+  let provider = "openrouter", bookkeeper = true, check = false, json = "", unfolded = false;
   // Strict JSON writes every line break inside a text as \n, which makes long instructions one unbroken block. Unfolding them is for reading only.
   const draw = () => { body.textContent = unfolded ? json.replace(/\\n/g, "\n") : json; };
   const body = el("pre", { class: "json" }), note = el("p", { class: "muted small" }), size = el("span", { class: "muted small" });
@@ -978,7 +982,7 @@ function turnPreview() {
   const load = async () => {
     body.textContent = "Building...";
     try {
-      const sent = await api("POST", "/api/preview", { preset, card: previewCard, turn: true, provider, bookkeeper });
+      const sent = await api("POST", "/api/preview", { preset, card: previewCard, turn: true, provider, bookkeeper, check });
       json = JSON.stringify(sent.request, null, 2);
       draw();
       note.textContent = `POST ${sent.url}`;
@@ -991,6 +995,8 @@ function turnPreview() {
   const tick = el("input", { type: "checkbox" });
   tick.checked = true;
   tick.addEventListener("change", () => { bookkeeper = tick.checked; load(); });
+  const checking = el("input", { type: "checkbox" });
+  checking.addEventListener("change", () => { check = checking.checked; load(); });
   const copy = el("button", { type: "button", text: "Copy", onclick: async () => { await navigator.clipboard.writeText(json); copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy"), 1200); } });
   const shade = el("div", { class: "shade", onclick: (event) => { if (event.target === shade) close(); } },
     el("div", { class: "window" },
@@ -999,6 +1005,7 @@ function turnPreview() {
         el("label", { class: "small" }, "Card", selectControl(previewCards, previewCard, false, (value) => { previewCard = value; load(); })),
         el("label", { class: "small" }, "Sent to", selectControl([["openrouter", "OpenRouter"], ["nanogpt", "Nano-GPT"], ["anthropic", "Anthropic"], ["custom", "Custom (OpenAI-style)"], ["local", "Local"]], provider, false, (value) => { provider = value; load(); })),
         el("label", { class: "check" }, tick, el("span", { text: "Player has the bookkeeper on" })),
+        el("label", { class: "check" }, checking, el("span", { text: "Player has Check before writing on" })),
         el("label", { class: "check" }, unfold, el("span", { text: "Show line breaks (easier to read; Copy still gives exact JSON)" })),
         copy, size),
       note,

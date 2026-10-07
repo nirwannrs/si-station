@@ -148,7 +148,9 @@ class PromptTest(unittest.TestCase):
         last = messages[-1]["content"]
         self.assertIn("Do not act, speak or decide for Ash", last)
         self.assertTrue(last.index("[Current game state]") < last.index("I sit down.") < last.index("Do not act, speak or decide for Ash"))
-        self.assertTrue(last.rstrip().endswith(self.preset["blocks"][-1]["content"].replace("{{user}}", "Ash")))      # the reminder is the very last thing the model reads
+        reminder = self.preset["blocks"][-1]["content"].replace("{{user}}", "Ash")
+        own = "\n\n" + prompt.prompt_text(None, "card_reminder") if self.card.data["world"].get("narrator_instructions") else ""
+        self.assertTrue(last.rstrip().endswith(reminder + own))      # the reminders are the very last thing the model reads, the card's own last of all
         self.assertTrue(last.index("[Current game state]") < last.index("(Reminder:"))
         for block in self.preset["blocks"]:
             if block["id"] in ("player_agency", "turn_reminder"):

@@ -9,7 +9,7 @@ import re
 
 from .card import PLAYER, SLOTS
 from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
-from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, state_name, together, xp_needed
+from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, stat_min, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
 REQUIRES = {
@@ -40,6 +40,10 @@ def apply_actions(card, state, actions, by_player=False):
     tends to say so once for every objective left; only the first is real.
     """
     results, moved_on = [], set()
+    ## New places and new items first, whatever order they were listed in: a model often writes
+    ## "move there" above "create it", and the move must not fail for want of the place.
+    made = ("create_location", "create_item")
+    actions = [a for a in actions if isinstance(a, dict) and a.get("type") in made] + [a for a in actions if not (isinstance(a, dict) and a.get("type") in made)]
     for action in actions:
         if isinstance(action, dict) and action.get("type") == "quest_advance":
             quest = str(action.get("quest")).strip().lower()
@@ -49,6 +53,8 @@ def apply_actions(card, state, actions, by_player=False):
             if result["ok"]:
                 moved_on.add(quest)
             results.append(result)
+        elif isinstance(action, dict) and action.get("type") == "change_stat" and action.get("amount") == 0:
+            continue                                # "Mana +0": a model reporting that nothing changed
         else:
             results.append(apply_action(card, state, action, by_player))
     return results + settle_quests(card, state)
@@ -118,6 +124,10 @@ def sell_price(card, state, shop_id, item_id):
 
 # Lookups. LLMs sometimes send a display name where an id belongs, so both are accepted.
 
+def _plain(text):
+    return "".join(c for c in text.lower() if c.isalnum())
+
+
 def _find(index, ref, what):
     if isinstance(ref, str):
         if ref in index:
@@ -125,6 +135,12 @@ def _find(index, ref, what):
         low = ref.strip().lower()
         for key, value in index.items():
             if key.lower() == low or str(value.get("name", value.get("title", ""))).lower() == low:
+                return key, value
+        # A model that was given a name and writes an id for it, or the other way round: "royal_gardens"
+        # for a place the story has just named "Royal Gardens" (whose id is gen_royal_gardens).
+        plain = _plain(ref)
+        for key, value in index.items():
+            if plain and plain in (_plain(key), _plain(key[4:] if key.startswith("gen_") else key), _plain(str(value.get("name", value.get("title", ""))))):
                 return key, value
     raise Rejected("There is no %s called %r." % (what, ref))
 
@@ -350,6 +366,23 @@ def _change_stat_action(card, state, a):
     wid, who = _who(state, a)
     sid, stat = _find(card.stats, a.get("stat"), "stat")
     return "%s: %s." % (who["name"], _change_stat(card, state, wid, sid, _amount(a)))
+
+
+def _change_stat_max(card, state, a):
+    """Lasting growth or loss the story shows: the most someone can have of a stat changes. What
+    they have now goes up with it, the way it does on a new level, and never stays above it."""
+    wid, who = _who(state, a)
+    sid, stat = _find(card.stats, a.get("stat"), "stat")
+    amount = _amount(a)
+    ceiling = stat_max(card, who, sid)
+    if ceiling is None:
+        raise Rejected("%s has no maximum to change. Change the stat itself." % stat["name"])
+    if amount == 0:
+        raise Rejected("amount must not be zero.")
+    who.setdefault("max", {})[sid] = max(ceiling + amount, stat_min(card, who, sid))
+    now = who["stats"].get(sid, stat["default"])
+    who["stats"][sid] = clamp_stat(card, who, sid, now + max(amount, 0))
+    return "%s: most %s %s, now %s/%s." % (who["name"], stat["name"], _signed(amount), _fmt(effective_stat(card, state, wid, sid)), _fmt(who["max"][sid]))
 
 
 def _connected(a, b):
@@ -715,6 +748,7 @@ _HANDLERS = {
     "sell": _sell,
     "change_money": _change_money,
     "change_stat": _change_stat_action,
+    "change_stat_max": _change_stat_max,
     "move": _move,
     "quest_start": _quest_start,
     "quest_advance": _quest_advance,

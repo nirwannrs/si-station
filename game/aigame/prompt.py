@@ -67,7 +67,8 @@ NARRATOR_ACTIONS = (
     ("inventory", '{"type": "transfer_item", "item": ID, "qty": N, "from": WHO, "to": WHO}  one character hands an item to another'),
     ("inventory", '{"type": "use_item", "who": WHO, "item": ID, "target": WHO}  a character uses up an item'),
     ("money", '{"type": "change_money", "who": WHO, "amount": N}  money gained (positive) or lost (negative) outside a shop'),
-    ("stats", '{"type": "change_stat", "who": WHO, "stat": STAT_ID, "amount": N}  for example damage is a negative amount'),
+    ("stats", '{"type": "change_stat", "who": WHO, "stat": STAT_ID, "amount": N}  what someone has of a stat right now goes down or up: spent, hurt, healed, recovered. Damage is a negative amount'),
+    ("stats", '{"type": "change_stat_max", "who": WHO, "stat": STAT_ID, "amount": N}  the most someone can have of a stat changes for good: real growth the text shows (long training completed, a power awakened), or a lasting loss (a crippling wound, a curse). Rare. Never for ordinary spending, harm or rest'),
     ("skills", '{"type": "use_skill", "who": CHARACTER_ID, "skill": SKILL_ID, "target": WHO}  a character other than the player uses one of their skills'),
     ("skills", '{"type": "unlock_skill", "who": WHO, "skill": SKILL_ID}  someone learns a skill through the story'),
     ("levels", '{"type": "gain_xp", "who": WHO, "amount": N}  experience for something achieved: about 10 for a small success, 30 for a real fight or a clever solution, 100 for a major victory'),
@@ -161,7 +162,9 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
     lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need) and (quests or need != "quests")]
     checks = []
     if uses(card, "stats"):
-        checks.append("- Costs and harm. If someone casts magic, uses an ability or exerts themselves and no result above already charged for it, lower the stat that fuels it (about 1 to 3 for something small, 4 to 6 for something solid, 8 or more for something great). If someone is hurt or healed, change the stat that measures it by a fitting amount.")
+        checks.append("- Costs and harm. If someone casts magic, uses an ability or exerts themselves and no result above already charged for it, lower the stat that fuels it (about 1 to 3 for something small, 4 to 6 for something solid, 8 or more for something great, on a stat that runs to about 20; scale that to the numbers the game state shows for the stat). If someone is hurt or healed, change the stat that measures it by a fitting amount. Recovery counts too: when the text shows someone has slept, rested, eaten or let time pass, raise what that restores for each person it applies to. A full night's sleep, or days passing, brings back everything that is spent and regained, whether or not the text names it. For each person who slept, read their Stats line in the game state and, for every stat shown as two numbers with a slash (12/20), record a change_stat of the difference so it reaches the second number, which is that person's own maximum. That covers health, stamina, mana and any other such stat alike; nobody who slept the night is left below a maximum. A short rest or a meal brings back part. Leave out a stat that is already at its maximum." + (
+            "\n  What each stat is: %s" % "; ".join("%s (%s): %s" % (stat["name"], stat["id"], stat["description"]) for stat in card.data["rules"].get("stats", []) if stat.get("description"))
+            if any(stat.get("description") for stat in card.data["rules"].get("stats", [])) else ""))
     if uses(card, "states"):
         checks.append("- States, as [States] below describes them. First go through every state the game state lists on anyone: does it still hold at the end of the text? clear_state each one that has ended (they woke, landed, got free, came back, calmed down). A state that is over is removed with clear_state, never kept with a note saying it is over. Then set_state what has begun, but only what passes the test there: a condition that will last, of body, situation or mind. A single act is not recorded.")
     if uses(card, "map"):
@@ -568,7 +571,7 @@ def _turn_message(player_text, results):
 VOLATILE_SLOTS = ("summary", "lorebook", "state", "quests")
 
 
-def narrator_prompt(card, state, preset, player_text, results, record=True):
+def narrator_prompt(card, state, preset, player_text, results, record=True, check=False):
     """Returns (system, messages). One message carries "cache": True, marking the end of the part
     that will be identical next turn; llm.chat_request turns that into the provider's own marker.
 
@@ -579,6 +582,8 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
     are sent as instructions.
     """
     world = card.data["world"]
+    own = (world.get("narrator_instructions") or "").strip()
+    sent_own = [False]
     me = state["actors"][PLAYER]
     ## What is in play this turn decides who is described and in how much detail. See state.cast_in_play.
     in_play = "%s\n%s" % (player_text, last_narration(card, state))
@@ -592,7 +597,8 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
     settled = [c for c in cast if c not in entering and not any(c in turn.get("cast", ()) for turn in live)]
     slots = {
         "world": lambda: "[World]\n%s%s" % (world["description"], "\n\n[Situation at the start]\n" + world["scenario"] if world.get("scenario") else ""),
-        "narrator_instructions": lambda: world.get("narrator_instructions", ""),
+        ## The card's own guidance is told apart from the preset's and given the last word. See wording.py.
+        "narrator_instructions": lambda: prompt_text(preset.get("prompts"), "card_instructions", instructions=own) if own else "",
         "persona": lambda: "[The player's character]\nName: %s%s%s" % (
             me["name"], "\n" + me["description"] if me.get("description") else "",
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
@@ -617,6 +623,8 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
             history_on = below_history = True
             continue
         text = slots[slot]() if slot else block.get("content", "")
+        if text and slot == "narrator_instructions":
+            sent_own[0] = True
         if text:
             ## The changing parts (state, quests, lore) go in front of what the player just said. An
             ## instruction placed below the story goes after it, as the very last thing the model
@@ -624,11 +632,18 @@ def narrator_prompt(card, state, preset, player_text, results, record=True):
             (tail if slot in VOLATILE_SLOTS else closing if not slot and below_history else stable).append(text)
     if not has_protocol and action_protocol(card, record, preset.get("prompts")):
         stable.append(action_protocol(card, record, preset.get("prompts")))
+    ## How to lay a reply out, so each paragraph can be shown under the right name. For every card.
+    stable.append(prompt_text(preset.get("prompts"), "narrator_layout"))
 
     messages = [{"role": "user", "content": OPENING_CUE}, {"role": "assistant", "content": opening(card, state)}]
     for turn in live if history_on else []:
         messages.append({"role": "user", "content": _entering(card, turn.get("cast")) + _turn_message(turn["player"], turn["results"])})
         messages.append({"role": "assistant", "content": turn["narration"]})
+    if check:
+        ## For a model that thinks before answering: a checklist to go through first. See parse_narration for what happens to a check written out.
+        closing.append(prompt_text(preset.get("prompts"), "narrator_check"))
+    if sent_own[0]:
+        closing.append(prompt_text(preset.get("prompts"), "card_reminder"))
     messages[-1]["cache"] = True
     messages.append({"role": "user", "content": "\n\n".join(tail + [_entering(card, entering) + _turn_message(player_text, results)] + closing)})
 
@@ -644,8 +659,15 @@ _ACTIONS_BLOCK = re.compile(r"<actions>(.*?)</actions>", re.DOTALL | re.IGNORECA
 _ECHOED_RESULTS = re.compile(r"^[ \t]*(\[Engine results[^\]\n]*\]|- (done|REJECTED|UP TO YOU)\b[^\n]*)[ \t]*\n?", re.M)
 
 
+# What a model thought through before writing, when it wrote that out instead of keeping it to
+# itself: the check it was asked for, or a reasoning model's thinking passed along in the reply.
+_THOUGHTS = re.compile(r"<(check|think|thinking)>.*?</\1>\s*", re.DOTALL | re.IGNORECASE)
+_THOUGHTS_UNCLOSED = re.compile(r"^\s*<(check|think|thinking)>.*?(\n\s*\n|$)", re.DOTALL | re.IGNORECASE)
+
+
 def parse_narration(text):
     """Splits a narrator reply into (story text, actions). A block cut off mid-way is dropped."""
+    text = _THOUGHTS_UNCLOSED.sub("", _THOUGHTS.sub("", text), count=1)
     text = _ECHOED_RESULTS.sub("", text)
     actions = []
     for block in _ACTIONS_BLOCK.findall(text):

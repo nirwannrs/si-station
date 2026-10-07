@@ -200,6 +200,42 @@ Use only these, with ids from the state. WHO is "player" or a character id.
 Report only what has actually happened in your text, not what is promised, planned or talked about. Do not repeat anything already listed in the engine results, and when a finished quest's reward listed there is later handed over in the story, that is the same reward: do not give it again. Leave the block out when nothing changes. The player never sees it.""")
 
 
+_builtin('narrator_layout', 'story', "How a reply is laid out", "Has the story model keep what a character does and what they say together in one paragraph, so the game can show it under that character's name.",
+         {}, """\
+[Layout of a reply]
+The game shows each paragraph of your reply under the name of the character it belongs to, so lay the reply out by whose moment it is:
+- A character's moment is one paragraph: what they do and what they say, together. Open it with the character by name, then their action, then their words in double quotes: Mira sets the ledger down and looks you over. "Room's four gold."
+- Keep a character's action and their words in the same paragraph, also when they do something between two lines of speech.
+- Start a new paragraph when another character takes over.
+- What belongs to no one character (the place, the weather, what {{user}} sees or feels, several people acting at once) gets a paragraph of its own, without anyone's speech in it.""")
+
+
+_builtin('narrator_check', 'story', "Check before writing", "A checklist the story model goes through in its thinking before it writes. Only sent when the player has switched it on, which is meant for models that think before answering.",
+         {}, """\
+[Before you write]
+Plan this reply and check the plan before you write a word of the story. Do it in your private thinking. If you have no private thinking, write the check first inside <check> and </check>, which the game removes. None of it may show in the story itself.
+Go through these, briefly:
+1. The game state. Where {{user}} is, who is actually there, what each of them has, can do and is in the middle of. Does the plan fit it? Nobody who is elsewhere speaks or acts here, and nothing is used, spent or known that the state does not give them.
+2. The engine results for this turn. Is each one shown in the story as it happened, and is anything rejected told as not having worked?
+3. The instructions. Which of the instructions you were given apply to this reply: this story's own instructions first, then the rest (who you may speak for, person and tense, length, how a reply ends)? Does the plan follow each one?
+4. The layout. Is each character's moment one paragraph, opening with their name, with their action and their words together?
+5. The thread. Does it follow from the last reply and from what {{user}} just did, and agree with what is remembered from earlier?
+Put right whatever fails. Then write only the story.""")
+
+
+_builtin('card_instructions', 'story', "The card's own instructions come first", "Wraps the card's Instructions for the narrator, telling the story model to follow them over the preset's instructions wherever the two differ.",
+         {'instructions': "the card's Instructions for the narrator"}, """\
+[This story's own instructions]
+The author of this story wrote what follows for you, for this story in particular. It comes first. Wherever it differs from anything else you are told here about how to write, what to include or leave out, tone, pacing, length or how the characters behave, follow this. Only the game's own rules, about what the game tracks and decides, stand above it.
+
+{{instructions}}""")
+
+
+_builtin('card_reminder', 'story', "Reminder of the card's instructions", "One line sent as the very last thing each turn, after the preset's own reminders. Only sent for a card that has Instructions for the narrator.",
+         {}, """\
+Above all, write this reply the way [This story's own instructions] ask. Where they and any other instruction pull in different directions, they win.""")
+
+
 _builtin('leaving_prose', 'story', "When the player leaves a place (bookkeeper on)", "What walking out of a scene means. Only sent for cards with a map.",
          {}, """\
 [When {{user}} leaves a place]
@@ -275,7 +311,7 @@ _builtin('direct_scene', 'helper', "Direct the scene", "Picks who speaks and wit
 You are the stage director of a visual novel. The narrator's latest text is given as numbered paragraphs. Work out four things from it.
 
 1. Who speaks. For each paragraph:
-- speaker: the id of the character whose spoken words make up the paragraph, or null when it is narration, description, or the player's own speech. A paragraph that is mostly one character talking, with a short "she says" around it, belongs to that character.
+- speaker: the id of the character the paragraph belongs to: the one who speaks in it, together with whatever that same character does around their words. A paragraph of only one character's actions belongs to them too when their own speech follows directly in the next paragraph. Use null for description that belongs to no one character, for a paragraph in which several characters speak, and for the player's own speech or actions.
 - expression: how that speaker looks while saying it, chosen only from that character's listed expressions. Use null when speaker is null.
 
 2. Where the characters are now. For each character whose place or activity the text changes or shows, give:
@@ -332,6 +368,11 @@ _sends("narrator_mechanics", _STORY + " It comes first, under the heading [Game 
        tracked=("The systems this card uses, named in a row: fights, inventory, money, stats, locations, quests and so on. Decided by the card's Game setup.", "card:setup"))
 _sends("narrator_prose", _STORY + " It follows How the game's rules work when the player has the bookkeeper on.")
 _sends("narrator_records", _STORY + " It follows How the game's rules work when the player has the bookkeeper off.", actions=_ACTIONS)
+_sends("narrator_layout", "Part of the story model's instructions, after the rest of the game's rules. Sent for every card.")
+_sends("narrator_check", "Near the end of the newest message, after what the player said and the preset's own reminders. Only when the player has switched on Check before writing.")
+_sends("card_instructions", "Part of the story model's instructions, where the preset's instruction list has the card's instructions. Only for a card that has them.",
+       instructions=("What the card's author wrote under Instructions for the narrator.", "card:world"))
+_sends("card_reminder", "The last lines of the newest message, after what the player said and after the preset's own reminders. Only for a card that has Instructions for the narrator.")
 _sends("leaving_prose", _STORY + " It comes after Writing for the bookkeeper, for cards with a map.")
 _sends("leaving_records", _STORY + " It comes after Reporting changes itself, for cards with a map.")
 _sends("resolve_actions", _HELPER,

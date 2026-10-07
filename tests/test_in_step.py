@@ -133,13 +133,39 @@ class EditablePromptsTest(unittest.TestCase):
             self.assertTrue(reworded[task].startswith("REWORDED " + task), task + " ignores the preset's wording")
 
     def test_the_story_models_rules_can_be_reworded_too(self):
-        for record, keys in ((True, ("narrator_mechanics", "narrator_records", "leaving_records")), (False, ("narrator_mechanics", "narrator_prose", "leaving_prose"))):
+        for record, keys in ((True, ("narrator_mechanics", "narrator_records", "leaving_records", "narrator_layout")), (False, ("narrator_mechanics", "narrator_prose", "leaving_prose", "narrator_layout"))):
             preset = dict(self.preset, prompts=dict((key, "REWORDED " + key) for key in keys))
             system = prompt.narrator_prompt(self.card, self.state, preset, "I wait.", [], record=record)[0]
             for key in keys:
                 self.assertIn("REWORDED " + key, system)
         story = [entry["key"] for entry in wording.BUILTIN_PROMPTS if entry["reader"] == "story"]
-        self.assertEqual(sorted(story), ["leaving_prose", "leaving_records", "narrator_mechanics", "narrator_prose", "narrator_records"])
+        self.assertEqual(sorted(story), ["card_instructions", "card_reminder", "leaving_prose", "leaving_records", "narrator_check", "narrator_layout", "narrator_mechanics", "narrator_prose", "narrator_records"])
+
+    def test_a_thinking_model_can_be_given_a_check_to_run_first(self):
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
+        self.assertNotIn("[Before you write]", system + messages[-1]["content"])                     # only when the player switches it on
+        preset = dict(self.preset, prompts={"narrator_check": "THINK IT THROUGH"})
+        system, messages = prompt.narrator_prompt(self.card, self.state, preset, "I wait.", [], check=True)
+        last = messages[-1]["content"]
+        self.assertTrue(last.index("I wait.") < last.index("THINK IT THROUGH"))                      # after what the player said
+        self.assertNotIn("THINK IT THROUGH", system)                                                 # and not in the part that is cached
+        for written in ("<check>1. fits. 2. fine.</check>\n\nRain falls.", "<think>\nhm\n</think>Rain falls.", "<check>1. fits.\n2. fine.\n\nRain falls."):
+            self.assertEqual(prompt.parse_narration(written)[0], "Rain falls.")
+        self.assertEqual(prompt.parse_narration("Rain falls. She says <check this>.")[0], "Rain falls. She says <check this>.")
+
+    def test_the_cards_own_instructions_are_given_the_last_word(self):
+        self.card.data["world"]["narrator_instructions"] = "Write long, slow scenes."
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
+        self.assertIn("[This story's own instructions]", system)
+        self.assertIn("comes first", system.split("[This story's own instructions]")[1].split("Write long, slow scenes.")[0])
+        self.assertTrue(messages[-1]["content"].rstrip().endswith("they win."))                       # after the player's message and the preset's reminders
+        preset = dict(self.preset, prompts={"card_instructions": "AUTHOR SAYS: {{instructions}}", "card_reminder": "MIND THE AUTHOR"})
+        system, messages = prompt.narrator_prompt(self.card, self.state, preset, "I wait.", [])
+        self.assertIn("AUTHOR SAYS: Write long, slow scenes.", system)
+        self.assertTrue(messages[-1]["content"].endswith("MIND THE AUTHOR"))
+        self.card.data["world"]["narrator_instructions"] = ""                                         # a card without any: nothing is said about them
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
+        self.assertNotIn("own instructions", system + messages[-1]["content"])
 
     def test_the_editors_show_each_prompt_the_way_it_is_really_sent(self):
         """Beside each helper prompt the editors list the sections sent under it. That list is
