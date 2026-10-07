@@ -166,7 +166,7 @@ class ServerTest(unittest.TestCase):
         shutil.copy(os.path.join(ROOT, "presets", "default.preset.json"), os.path.join(self.work, "presets", "default.preset.json"))
         status, listing = self.call("GET", "/api/presets")
         self.assertEqual([(p["id"], p["builtin"], p["problems"]) for p in listing["presets"]], [("default", True, 0)])
-        self.assertEqual(len(listing["wording"]), 16)                             # every prompt the game writes itself, for the builder to show
+        self.assertEqual(len(listing["wording"]), 19)                             # every prompt the game writes itself, for the builder to show
         self.assertEqual(sorted(listing["slots"]), sorted(wording.SLOTS))
         self.assertEqual(self.call("PUT", "/api/presets/default", {"name": "Mine"})[0], 403)      # the game's own is never changed
 
@@ -208,6 +208,9 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(sent["messages"][0]["content"].startswith("You are the narrator. UNSAVED EDIT."))
         self.assertIn("A bookkeeper reads what you write", sent["messages"][0]["content"])       # the bookkeeper is on unless said otherwise
         self.assertIn("[The scene right now]", sent["messages"][-1]["content"])
+        self.assertIn("[Time and place line]", sent["messages"][0]["content"])                      # on unless said otherwise, as in the game
+        plain = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "turn": True, "provider": "openrouter", "header": False})[1]
+        self.assertNotIn("[Time and place line]", plain["request"]["messages"][0]["content"])
         self.assertNotIn("[Before you write]", sent["messages"][-1]["content"])                    # the check is shown only when ticked
         checked = self.call("POST", "/api/preview", {"preset": draft, "card": "rusty_lantern", "turn": True, "provider": "openrouter", "check": True})[1]
         self.assertIn("[Before you write]", checked["request"]["messages"][-1]["content"])

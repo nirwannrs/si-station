@@ -219,8 +219,32 @@ Go through these, briefly:
 2. The engine results for this turn. Is each one shown in the story as it happened, and is anything rejected told as not having worked?
 3. The instructions. Which of the instructions you were given apply to this reply: this story's own instructions first, then the rest (who you may speak for, person and tense, length, how a reply ends)? Does the plan follow each one?
 4. The layout. Is each character's moment one paragraph, opening with their name, with their action and their words together?
-5. The thread. Does it follow from the last reply and from what {{user}} just did, and agree with what is remembered from earlier?
+5. What each one knows. Does anyone speak of, or act on, something from a turn they were not present for and have not been told of since?
+6. The time and place line, if you were asked for one. Does it carry on from the last one, and does the story feel the hour and the weather it gives?
+7. The thread. Does it follow from the last reply and from what {{user}} just did, and agree with what is remembered from earlier?
 Put right whatever fails. Then write only the story.""")
+
+
+_builtin('narrator_knowledge', 'story', "What each character knows", "Keeps characters from knowing what they were not there for. Every past turn is headed with who was present; this says what that means.",
+         {}, """\
+[What each character knows]
+You have read the whole story. The characters have not. Every earlier turn is headed with who was present for it, and the scene briefing says who has only recently joined.
+A character knows what happened in the turns they were present for, what someone has told or shown them in the story since, and what their own description says they know. That is all they can speak of or act on. What {{user}} did, said or can do in a turn they were absent for is unknown to them, and so are {{user}}'s thoughts and anything {{user}} has not said or shown.
+Someone who meets {{user}} for the first time knows nothing of them beyond what they can see and what their description gives them. When something they were not there for would matter to them, let them ask, wonder, guess wrongly or be told, in the story.""")
+
+
+_builtin('narrator_header', 'story', "The time and place line", "Has the story model head every reply with one line giving the hour, the date, the exact spot and the weather, and keep it going from turn to turn. The form of the line is the card's, or the game's own when the card gives none.",
+         {'format': "the form of the line: the card's, or the game's usual one"}, """\
+[Time and place line]
+Begin every reply with one line in square brackets, in exactly this form. Then a blank line, then the story.
+{{format}}
+Fill in every part, and keep the symbols and the order as they are.
+- Carry it on from the line that heads your previous reply. Move the time forward by as long as what has happened since took: minutes for talk, longer for work or a walk. When the story skips time (sleep, a journey, study, being unconscious), skip it in the line too, and let the day and the date follow.
+- The place is the Location the game state gives, then the exact spot within it. It changes the moment {{user}} is somewhere else.
+- The weather has its symbol and the temperature as it is felt. It changes the way weather does: gradually, with the hour and the season.
+- In an invented world, use that world's own calendar, month names and era, and stay with them once chosen. In the real world, use real dates.
+- If no line heads an earlier reply, set one that fits where the story stands.
+The line is not decoration. The hour, the weather and the temperature are felt in the story: people are sleepy late at night, shiver in the cold and sweat in the heat, and places are lit, busy or empty as the hour has them.""")
 
 
 _builtin('card_instructions', 'story', "The card's own instructions come first", "Wraps the card's Instructions for the narrator, telling the story model to follow them over the preset's instructions wherever the two differ.",
@@ -317,7 +341,7 @@ You are the stage director of a visual novel. The narrator's latest text is give
 2. Where the characters are now. For each character whose place or activity the text changes or shows, give:
 - location: "here" if they end the text in the player's company; a location id if they have arrived at or are at that place by the end of the text; null if they left for somewhere that is not on the list or are otherwise out of reach. Someone who only talks of going somewhere, agrees to, or is about to, has not gone: leave their location out.
 - note: a few words on what they are doing or where they went, such as "tending the bar" or "rode off toward the capital".
-Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here".
+Report only what the text states or plainly implies. Leave out characters the text does not mention. A character who arrives or is first met is "here". So is anyone who appears in the scene, acts in it, speaks in it or is spoken to face to face, wherever the game had them before this text: the text need not show them travelling. Check each such character's "Before this text" and report "here" for every one that says anything else.
 
 The text does not always use names. Work out who an unnamed person is ("a skinny boy", "the woman behind the bar") from each character's listed looks and from where they were before this text. If you cannot tell which character someone is, leave them out of both lists rather than guess.
 
@@ -332,11 +356,23 @@ Reply with JSON only:
  "scene": "..."}""")
 
 
+_builtin('move_world', 'helper', "Move the world on", "Decides where the people the player knows have got to while the player was elsewhere, so nobody stays for ever where the story last showed them.",
+         {}, """\
+You keep track of where the people of a text adventure are while the player is not with them. The world does not wait for the player: people finish what they were doing, go home, go back to their duties, travel.
+
+You are given the places, where the player is now, the people the player knows who are not with them (who each is, and where the game last had them and doing what), and the story so far. For each person whose last known place no longer makes sense, say where they would be by now, going by who they are, what they were doing, what the story said they meant to do, and how much time has passed.
+- location: a place id from the list. Use null when they would be somewhere that is not on the list, or when the story gives no way to tell: someone whose business in a place is over does not stay there.
+- note: a few words on what they are doing there, such as "back at the squad base" or "recovering in the infirmary".
+Leave a person out when they would still be where the game has them. Never give the player's own place as a location: only the story brings people into the player's company. Someone who would by now be in the same place as the player gets null, with a note saying so ("somewhere in the capital"). Invent no events; only place people where they would ordinarily be.
+
+Reply with JSON only: {"whereabouts": [{"id": "some_id", "location": "some_location_id", "note": "..."}]}""")
+
+
 _builtin('write_journal', 'helper', "Keep the journal", "Writes a short entry about a scene once it is over, so the story model can be reminded of it much later.",
          {}, """\
 You keep the journal of a text adventure. A scene has just ended; it is given to you in full. Write one entry about it, so that the narrator can be reminded of this scene much later, when the scene itself is long out of sight.
 
-Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, what was learned or kept secret, how anyone's standing with the player changed, and what was left unfinished. Use names. Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
+Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with the player changed, and what was left unfinished. Use names. Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
 
 Give it a short title, and three to six keywords: the names, places, objects and subjects that, if they came up again, should bring this scene to mind. Use the words the story used.
 
@@ -352,7 +388,7 @@ Reply with JSON only: {"choices": ["...", "..."]}""")
 
 _builtin('summarize', 'helper', "Summarize old turns", "Folds older turns into the running summary.",
          {}, """\
-You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Leave out inventory, money and stats; the game tracks those. At most 250 words. Reply with the summary only.""")
+You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Where the scenes give a time and place, keep when the things that matter happened (the day or date), in the story's own terms. Each new scene says who was present: for anything it could matter later who knows of, say who was there for it or who was told. Leave out inventory, money and stats; the game tracks those. At most 250 words. Reply with the summary only.""")
 
 
 # How each one is sent. A helper job is one call: its wording as the instruction, then a single
@@ -370,6 +406,9 @@ _sends("narrator_prose", _STORY + " It follows How the game's rules work when th
 _sends("narrator_records", _STORY + " It follows How the game's rules work when the player has the bookkeeper off.", actions=_ACTIONS)
 _sends("narrator_layout", "Part of the story model's instructions, after the rest of the game's rules. Sent for every card.")
 _sends("narrator_check", "Near the end of the newest message, after what the player said and the preset's own reminders. Only when the player has switched on Check before writing.")
+_sends("narrator_knowledge", "Part of the story model's instructions, after How a reply is laid out. Only for a card that has characters.")
+_sends("narrator_header", "Part of the story model's instructions, last of the game's rules. Only when the player has the time and place line on. Each earlier reply is sent back headed by the line it was given.",
+       format=("The form of the line. A card can give its own under World; otherwise the game's usual one is used.", "card:world"))
 _sends("card_instructions", "Part of the story model's instructions, where the preset's instruction list has the card's instructions. Only for a card that has them.",
        instructions=("What the card's author wrote under Instructions for the narrator.", "card:world"))
 _sends("card_reminder", "The last lines of the newest message, after what the player said and after the preset's own reminders. Only for a card that has Instructions for the narrator.")
@@ -384,6 +423,7 @@ _sends("record_changes", _HELPER,
        ("[Current game state]", "the full state, after the player's own actions were applied") + _STATE,
        ("[Active quests]", "open quests and objectives; only when no quest judge is deciding them", "The card's quests, and the save for how far each has got.", "card:quests"),
        ("[Quest rewards the game has already paid]", "the reward of a quest finished in the last few turns, so the story handing it over is not recorded as a second one; only when there is one", "The game: it pays a quest's reward the moment the quest is finished. The rewards are the card's.", "card:quests"),
+       ("[Time and place, for reference]", "the story's time and place line before this reply and with it, to judge how much time passed; only when the player has that line on", "The story model: it writes the line at the head of each reply (The time and place line). Helpers only read it.", "preset:story/narrator_header"),
        ("[Just before, already recorded; for context only]", "the end of the last two replies", "The save: the last 600 characters of each of the two replies before this one.", None),
        ("[Player's message]", "what the player just typed", "The player, this turn.", None),
        ("[Engine results already recorded this turn]", "what the game already applied, so it is not recorded twice; only when there is any", "The game: what it did with the player's own actions this turn, after Understand what the player does listed them.", "preset:helpers/resolve_actions"),
@@ -409,5 +449,11 @@ _sends("suggest_choices", _HELPER,
 _sends("summarize", _HELPER,
        ("[Existing summary]", "the summary so far", "The save: what this same job wrote the last time it ran. \"(none yet)\" the first time.", None),
        ("[New scenes]", "the turns being folded into it", "The save: the oldest turns that are not in the summary yet, word for word, each as what the player typed and what the story model replied. The game takes the older half of the turns the story model still sees, once there are more than the player's \"summarize after\" number or the prompt no longer fits the context size.", "preset:settings"))
+_sends("move_world", _HELPER,
+       ("[Places]", "every place the game has, with its id", "The card's locations, and any the story has added.", "card:locations"),
+       ("[The player]", "where the player is now", "The save.", None),
+       ("[People elsewhere]", "up to 25 people the player knows who are not with them: who each is, where the game last had them, and where they began", "The card's characters, and the save for where each one is.", "card:characters"),
+       ("[Story so far]", "the running summary", "The save: written by Summarize old turns.", "preset:helpers/summarize"),
+       ("[Latest turns]", "the last three turns", "The save: what the player typed and the end of each reply.", None))
 _sends("write_journal", _HELPER,
        ("[Scene]", "the scene that just ended, turn by turn", "The save: every turn since the last journal entry, word for word, each as what the player typed and what the story model replied. The game decides where a scene ends: the player goes somewhere else, an objective is finished, a fight is over, or twenty turns have passed.", None))

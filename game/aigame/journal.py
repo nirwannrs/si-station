@@ -72,6 +72,12 @@ def add(card, state, start, end, place, written):
     entries = state.setdefault("journal", [])
     entry = dict(written, id=1 + max([e["id"] for e in entries] or [0]), start=start, end=end, place=place,
                  who=named_in(card, told + "\n" + written["content"]), pinned=False)
+    when = [t["header"] for t in turns if t.get("header")]
+    if when:
+        entry["when"] = when[0].strip("[] ")        # the story's own time and place as the scene began
+    if turns and all("there" in t or "with" in t for t in turns):
+        # who was there for any of it, so the story model can tell who knows of it. See prompt.witnesses.
+        entry["there"] = sorted(set(c for t in turns for c in t.get("there", t.get("with", []))))
     entries.append(entry)
     state["journal_upto"] = max(state.get("journal_upto", 0), end)
     return entry
@@ -120,8 +126,12 @@ def scene_facts(state):
             "with": sorted(who for who, actor in state["actors"].items() if who != PLAYER and actor["location"] is not None and actor["location"] == me["location"])}
 
 
-def describe(entries):
-    """Entries as the story model reads them, oldest first."""
+def describe(entries, card=None):
+    """Entries as the story model reads them, oldest first, each saying who was there for it."""
     if not entries:
         return ""
-    return "[Remembered from earlier in the story]\n" + "\n".join("- %s: %s" % (e["title"], e["content"]) for e in entries)
+    def there(entry, e_when):
+        names = [card.characters[c]["name"] for c in entry.get("there", []) if c in card.characters] if card is not None and "there" in entry else None
+        facts = ([e_when] if e_when else []) + ([] if names is None else ["present: %s" % (", ".join(names) or "nobody but {{user}}")])
+        return " (%s)" % "; ".join(facts) if facts else ""
+    return "[Remembered from earlier in the story]\n" + "\n".join("- %s%s: %s" % (e["title"], there(e, e.get("when")), e["content"]) for e in entries)

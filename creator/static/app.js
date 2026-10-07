@@ -559,6 +559,10 @@ const SECTIONS = [
       { t: "area", k: "scenario", label: "Situation at the start", rows: 3, help: "Use {{user}} wherever the player's name belongs." },
       { t: "area", k: "opening", label: "Opening", rows: 7, help: "The first thing the player reads. Blank lines separate paragraphs." },
       { t: "area", k: "narrator_instructions", label: "Instructions for the narrator", rows: 4, help: "Guidance only the AI sees: pacing, secrets to keep, what to avoid." },
+      { t: "text", k: "header_format", label: "Time and place line: its form (optional)", help: "Every reply is headed by one line giving the time, date, place and weather, which the AI keeps going as the story moves. Write the form it should take, with placeholders the AI fills in. Leave empty for the usual one: 🕰️ HH:MM AM/PM | 🗓️ Day # - DayOfWeek, Month DD, YYYY Era | 📍 Location - Specific area | WeatherEmoji Weather, Temp °F",
+        placeholder: "🕰️ HH:MM | 🗓️ Day #, Month DD, Year 1 of the New Calendar | 📍 Location - Specific area | WeatherEmoji Weather, Temp °C" },
+      { t: "text", k: "header_start", label: "Time and place line: where the story starts (optional)", help: "The line as it stands at the opening, filled in. Leave empty to let the AI choose a fitting start.",
+        placeholder: "🕰️ 08:00 | 🗓️ Day 1, March 3, Year 1 of the New Calendar | 📍 Capital - East gate | ☀️ Clear, 18 °C" },
       { t: "select", k: "start_location", label: "Where the player starts", options: O.locations, when: () => (card.locations || []).length },
     ] },
   ] },
@@ -973,7 +977,7 @@ function sectionText(entry, heading, message) {
 // It is built by the game's own code from this preset as it stands, saved or not.
 function turnPreview() {
   if (!previewCards.length) return alert("Make a card with no problems first; the preview is built from a real card.");
-  let provider = "openrouter", bookkeeper = true, check = false, json = "", unfolded = false;
+  let provider = "openrouter", bookkeeper = true, check = false, header = true, json = "", unfolded = false;
   // Strict JSON writes every line break inside a text as \n, which makes long instructions one unbroken block. Unfolding them is for reading only.
   const draw = () => { body.textContent = unfolded ? json.replace(/\\n/g, "\n") : json; };
   const body = el("pre", { class: "json" }), note = el("p", { class: "muted small" }), size = el("span", { class: "muted small" });
@@ -982,7 +986,7 @@ function turnPreview() {
   const load = async () => {
     body.textContent = "Building...";
     try {
-      const sent = await api("POST", "/api/preview", { preset, card: previewCard, turn: true, provider, bookkeeper, check });
+      const sent = await api("POST", "/api/preview", { preset, card: previewCard, turn: true, provider, bookkeeper, check, header });
       json = JSON.stringify(sent.request, null, 2);
       draw();
       note.textContent = `POST ${sent.url}`;
@@ -997,6 +1001,9 @@ function turnPreview() {
   tick.addEventListener("change", () => { bookkeeper = tick.checked; load(); });
   const checking = el("input", { type: "checkbox" });
   checking.addEventListener("change", () => { check = checking.checked; load(); });
+  const clock = el("input", { type: "checkbox" });
+  clock.checked = true;
+  clock.addEventListener("change", () => { header = clock.checked; load(); });
   const copy = el("button", { type: "button", text: "Copy", onclick: async () => { await navigator.clipboard.writeText(json); copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy"), 1200); } });
   const shade = el("div", { class: "shade", onclick: (event) => { if (event.target === shade) close(); } },
     el("div", { class: "window" },
@@ -1006,6 +1013,7 @@ function turnPreview() {
         el("label", { class: "small" }, "Sent to", selectControl([["openrouter", "OpenRouter"], ["nanogpt", "Nano-GPT"], ["anthropic", "Anthropic"], ["custom", "Custom (OpenAI-style)"], ["local", "Local"]], provider, false, (value) => { provider = value; load(); })),
         el("label", { class: "check" }, tick, el("span", { text: "Player has the bookkeeper on" })),
         el("label", { class: "check" }, checking, el("span", { text: "Player has Check before writing on" })),
+        el("label", { class: "check" }, clock, el("span", { text: "Player has the time and place line on" })),
         el("label", { class: "check" }, unfold, el("span", { text: "Show line breaks (easier to read; Copy still gives exact JSON)" })),
         copy, size),
       note,

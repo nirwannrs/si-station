@@ -45,7 +45,9 @@
         "scenario": { "type": "string", "description": "The current situation at game start." },
         "opening": { "type": "string", "description": "First narration shown to the player. Supports {{user}}." },
         "narrator_instructions": { "type": "string", "description": "Card-specific guidance for the narrator, layered on top of the preset." },
-        "start_location": { "$ref": "#/$defs/id" }
+        "start_location": { "$ref": "#/$defs/id" },
+        "header_format": { "type": "string", "maxLength": 400, "description": "The form of the time and place line that heads every reply, written as a template the story model fills in, for example: 🕰️ HH:MM | 🗓️ Day #, Month DD, Year of the Clover Kingdom | 📍 Location - Specific area | WeatherEmoji Weather, Temp °C. Left out, the game's usual form is used (real-world clock, date, place and weather)." },
+        "header_start": { "type": "string", "maxLength": 400, "description": "The time and place line the story begins on, in that form, already filled in. Left out, the story model chooses a fitting start." }
       }
     },
     "rules": {

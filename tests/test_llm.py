@@ -704,6 +704,45 @@ class BookkeeperTest(unittest.TestCase):
                           "start": [{"quest": quest}, {"id": quest}, {"name": "?"}, [quest], 7, None, quest]})
         self.assertEqual(prompt.parse_judge(odd, self.card), [{"type": "quest_start", "quest": quest}] * 3)
 
+    def test_the_story_model_is_shown_who_was_there_for_each_turn(self):
+        """Seen in play: a character who had only just arrived spoke of what the player had done before he came."""
+        self.state["history"] += [
+            {"player": "I vanish the cart.", "results": [], "narration": "It is gone.", "with": ["mira"], "there": ["mira"]},
+            {"player": "I wait.", "results": [], "narration": "Tobin comes in.", "with": ["mira"], "there": ["mira", "tobin"]},
+            {"player": "Hello.", "results": [], "narration": "He nods.", "with": ["mira"], "direction": [{"speaker": "tobin", "expression": "neutral"}]},
+            {"player": "Old turn.", "results": [], "narration": "From before the game kept track."}]
+        self.state["actors"]["tobin"]["location"] = self.state["actors"]["player"]["location"]
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I ask Tobin what he saw.", [])
+        asked = [m["content"] for m in messages if m["role"] == "user"]
+        self.assertTrue(asked[1].startswith("[Present: Mira Oakhand]\nI vanish the cart."))
+        self.assertTrue(asked[2].startswith("[Present: Mira Oakhand, Tobin]\n"))
+        self.assertTrue(asked[3].startswith("[Present: Mira Oakhand, Tobin]\n"))                    # worked out from who spoke, for a turn that did not record it
+        self.assertTrue(asked[4].startswith("Old turn."))                                           # nothing is claimed about a turn nobody kept track of
+        self.assertIn("[What each character knows]", system)
+        del self.state["history"][-1]
+        last = prompt.narrator_prompt(self.card, self.state, self.preset, "I ask Tobin what he saw.", [])[1][-1]["content"]
+        self.assertIn("Here only since recently: Tobin (the last 2 turns).", last)
+        self.assertNotIn("Mira Oakhand (the last", last)                                             # she has been there throughout
+        self.assertIn("Present: Mira Oakhand\nPlayer: I vanish the cart.", prompt.summary_prompt(self.card, self.state, self.state["history"])[1][0]["content"])
+
+    def test_the_world_moves_on_while_the_player_is_elsewhere(self):
+        """Asked for after play: a captain last seen at the exam was still "at the coliseum" many scenes later."""
+        self.state["actors"]["marsh_bandit"]["known"] = False
+        self.assertEqual(prompt.offstage(self.card, self.state), ["tobin"])                          # Mira is with the player; the bandit is not someone they know
+        user = prompt.world_prompt(self.card, self.state)[1][0]["content"]
+        self.assertIn("- Tobin (id: tobin).", user)
+        self.assertNotIn("Mira Oakhand (id:", user)
+        here = self.state["actors"]["player"]["location"]
+        said = json.dumps({"whereabouts": [{"id": "tobin", "location": "cellar", "note": "fetching a cask"}, {"id": "tobin", "location": here}, {"id": "tobin", "location": "here"},
+                                           {"id": "mira", "location": "stable"}, {"id": "marsh_bandit", "location": "stable"}]})
+        moves = prompt.parse_world(said, self.card, self.state)
+        self.assertEqual(moves, [{"id": "tobin", "location": "cellar", "note": "fetching a cask"}])    # never to the player, never someone who is with them or unknown to them
+        track(self.card, self.state, moves)
+        self.assertEqual((self.state["actors"]["tobin"]["location"], self.state["actors"]["tobin"]["note"]), ("cellar", "fetching a cask"))
+        gone = prompt.parse_world(json.dumps({"whereabouts": [{"id": "tobin", "location": None, "note": "left for the coast"}]}), self.card, self.state)
+        track(self.card, self.state, gone)
+        self.assertIsNone(self.state["actors"]["tobin"]["location"])                                  # business over: off the map, not left standing where he was
+
     def test_the_director_cannot_move_someone_the_text_knows_nothing_of(self):
         """Seen in play: the player walked to the stable, the text never mentioned Mira, and the
         director reported her gone from the map."""

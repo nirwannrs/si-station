@@ -120,6 +120,7 @@ class EditablePromptsTest(unittest.TestCase):
             "record_changes": prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", prompts=prompts),
             "judge_quests": prompt.judge_prompt(c, s, "I wait.", "Rain.", prompts=prompts),
             "write_journal": prompt.journal_prompt(c, s, [{"player": "hi", "narration": "Rain."}], prompts=prompts),
+            "move_world": prompt.world_prompt(c, s, prompts=prompts),
         }
         return dict((task, system) for task, (system, messages) in built.items())
 
@@ -139,7 +140,7 @@ class EditablePromptsTest(unittest.TestCase):
             for key in keys:
                 self.assertIn("REWORDED " + key, system)
         story = [entry["key"] for entry in wording.BUILTIN_PROMPTS if entry["reader"] == "story"]
-        self.assertEqual(sorted(story), ["card_instructions", "card_reminder", "leaving_prose", "leaving_records", "narrator_check", "narrator_layout", "narrator_mechanics", "narrator_prose", "narrator_records"])
+        self.assertEqual(sorted(story), ["card_instructions", "card_reminder", "leaving_prose", "leaving_records", "narrator_check", "narrator_header", "narrator_knowledge", "narrator_layout", "narrator_mechanics", "narrator_prose", "narrator_records"])
 
     def test_a_thinking_model_can_be_given_a_check_to_run_first(self):
         system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
@@ -152,6 +153,36 @@ class EditablePromptsTest(unittest.TestCase):
         for written in ("<check>1. fits. 2. fine.</check>\n\nRain falls.", "<think>\nhm\n</think>Rain falls.", "<check>1. fits.\n2. fine.\n\nRain falls."):
             self.assertEqual(prompt.parse_narration(written)[0], "Rain falls.")
         self.assertEqual(prompt.parse_narration("Rain falls. She says <check this>.")[0], "Rain falls. She says <check this>.")
+
+    def test_the_story_keeps_a_time_and_place_line(self):
+        line = "[ 🕰️ 09:40 PM | 🗓️ Day 1 - Tuesday, March 3, 1422 | 📍 Rusty Lantern - By the hearth | 🌧️ Rain, 44 °F ]"
+        self.assertEqual(prompt.split_header(line + "\n\nRain drums on the roof."), (line, "Rain drums on the roof."))
+        self.assertEqual(prompt.split_header("  " + line + "\nRain."), (line, "Rain."))
+        for plain in ("Rain drums on the roof.", "[She laughs.]\n\nRain.", "\"[sic]\" he wrote."):
+            self.assertEqual(prompt.split_header(plain), (None, plain))                                # a story that merely opens with a bracket is left alone
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [])
+        self.assertNotIn("[Time and place line]", system)                                             # only when it is switched on
+        self.state["history"].append({"player": "I sit.", "results": [], "narration": "You sit.", "header": line})
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [], header=True)
+        self.assertIn(prompt.DEFAULT_HEADER, system)
+        self.assertEqual(messages[3]["content"], line + "\n\nYou sit.")                               # each reply goes back headed by its own line
+        self.assertFalse(messages[1]["content"].startswith("["))                                      # the card gives no starting line
+        self.card.data["world"].update(header_format="HH:MM | Day # of the Thaw | Place", header_start="06:00 | Day 1 of the Thaw | {{user}}'s camp")
+        system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [], header=True)
+        self.assertIn("[ HH:MM | Day # of the Thaw | Place ]", system)
+        self.assertTrue(messages[1]["content"].startswith("[ 06:00 | Day 1 of the Thaw | Traveler's camp ]\n\n"))
+        self.assertEqual(card.check_card(self.card.data), [])
+        # The helpers read the line and never write it: the bookkeeper to judge how long things took, the summary and journal to say when.
+        books = prompt.bookkeeper_prompt(self.card, self.state, "I sleep.", [], "Morning.", clock=(line, "[ 🕰️ 07:00 AM | 🗓️ Day 2 ]"))[1][0]["content"]
+        self.assertIn("Before this text: 🕰️ 09:40 PM", books)
+        self.assertIn("With this text: 🕰️ 07:00 AM | 🗓️ Day 2", books)
+        self.assertNotIn("for reference", prompt.bookkeeper_prompt(self.card, self.state, "I sleep.", [], "Morning.")[1][0]["content"])
+        self.assertIn("Time and place: 🕰️ 09:40 PM", prompt.summary_prompt(self.card, self.state, self.state["history"])[1][0]["content"])
+        self.assertIn("Time and place: 🕰️ 09:40 PM", prompt.journal_prompt(self.card, self.state, self.state["history"])[1][0]["content"])
+        self.state["header"] = line
+        self.assertIn("Time and place now, as the story has it: 🕰️ 09:40 PM", prompt.world_prompt(self.card, self.state)[1][0]["content"])
+        self.card.data["world"]["header_format"] = "a\nb"
+        self.assertEqual(len(card.check_card(self.card.data)), 1)
 
     def test_the_cards_own_instructions_are_given_the_last_word(self):
         self.card.data["world"]["narrator_instructions"] = "Write long, slow scenes."
@@ -181,9 +212,10 @@ class EditablePromptsTest(unittest.TestCase):
             "suggest_choices": [prompt.suggest_prompt(c, s, 3)],
             "summarize": [prompt.summary_prompt(c, s, s["history"])],
             "direct_scene": [prompt.director_prompt(c, s, ["Rain."])],
-            "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False), prompt.bookkeeper_prompt(c, paid, "I wait.", [], "Rain.")],
+            "record_changes": [prompt.bookkeeper_prompt(c, s, "I wait.", results, "Rain."), prompt.bookkeeper_prompt(c, s, "I wait.", [], "Rain.", quests=False), prompt.bookkeeper_prompt(c, paid, "I wait.", [], "Rain.", clock=("[ 9 PM | Day 1 ]", "[ 7 AM | Day 2 ]"))],
             "judge_quests": [prompt.judge_prompt(c, s, "I wait.", "Rain.")],
             "write_journal": [prompt.journal_prompt(c, s, s["history"])],
+            "move_world": [prompt.world_prompt(c, s)],
         }
         self.assertEqual(sorted(sent), sorted(name for name, label in prompt.HELPER_TASKS))
         for task, builds in sent.items():

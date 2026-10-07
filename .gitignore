@@ -42,3 +42,7 @@
 __pycache__/
 .DS_Store
 /.claude/
+
+# Presets being made are personal work too. Only the one that ships is kept.
+/presets/*
+!/presets/default.preset.json

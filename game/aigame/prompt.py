@@ -25,6 +25,7 @@ HELPER_TASKS = (
     ("record_changes", "Keep the books (record what each reply changed)"),
     ("judge_quests", "Judge quest progress"),
     ("write_journal", "Keep the journal (remember each scene)"),
+    ("move_world", "Move the world on (where people go while the player is elsewhere)"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -156,7 +157,7 @@ def action_protocol(card, record=True, prompts=None):
 
 # The bookkeeper: a helper that turns the narrator's prose into recorded changes.
 
-def bookkeeper_prompt(card, state, player_text, results, narration, quests=True, prompts=None):
+def bookkeeper_prompt(card, state, player_text, results, narration, quests=True, prompts=None, clock=None):
     """state is the game as it stands after the player's own actions were applied. quests is False
     when a separate quest judge is deciding quest progress, so the bookkeeper leaves quests alone."""
     lines = [line.replace("{{user}}", "the player") for need, line in NARRATOR_ACTIONS if uses(card, need) and (quests or need != "quests")]
@@ -168,7 +169,7 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
     if uses(card, "states"):
         checks.append("- States, as [States] below describes them. First go through every state the game state lists on anyone: does it still hold at the end of the text? clear_state each one that has ended (they woke, landed, got free, came back, calmed down). A state that is over is removed with clear_state, never kept with a note saying it is over. Then set_state what has begun, but only what passes the test there: a condition that will last, of body, situation or mind. A single act is not recorded.")
     if uses(card, "map"):
-        checks.append("- Places. Move someone only when the text shows them arrived somewhere else by its end. People talking about going somewhere, deciding to, being invited to, getting ready to, or setting off without the text showing them arrive are all still where the game state has them, and nothing is recorded; they will be moved when a later text shows them there. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
+        checks.append("- Places. Move someone only when the text shows them arrived somewhere else by its end. People talking about going somewhere, deciding to, being invited to, getting ready to, or setting off without the text showing them arrive are all still where the game state has them, and nothing is recorded; they will be moved when a later text shows them there. If the player ends the text somewhere other than the Location in the game state, move them there, however they got there and however far it is (a portal, a journey, being taken), including back to where they were if they were stopped from leaving. Move every character who went with them too. If they end up in a place that is not in the game state's lists at all, create_location it first when that action is listed above, then move them there by its name. Someone who turns up where the player is, acts there or is spoken to face to face is there, whether or not the text says how they came: move them to the player's location if the game state has them elsewhere. If the text makes plain they are now held in place, lock_travel; if it lets them go, unlock_travel.")
     if uses(card, "inventory") or uses(card, "money"):
         checks.append("- Belongings. Anything handed over, picked up, found, lost, broken, used up, paid or received. Only a change of hands counts: what someone is merely described as wearing, holding or working with is scenery, not a new item, and what is promised, offered, owed or still to be collected has not changed hands yet.")
     if uses(card, "quests") and quests:
@@ -187,11 +188,16 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
                 + ["%s x%d" % (card.items[i]["name"], n) for i, n in p["items"].items() if n > 0 and i in card.items]))
             for p in paid_lately(state)]
     rewards = "[Quest rewards the game has already paid]\n%s\nIf the text shows one of these being handed over, announced or awarded, it is this same reward: record nothing for it.\n\n" % "\n".join(paid) if paid else ""
+    ## clock is (the line before this text, the line that heads it), either of which may be missing.
+    ## It is there to be read: how much time went by decides how much anyone recovered.
+    before, now = clock or (None, None)
+    times = "[Time and place, for reference]\n%s%sThe story keeps this itself. Use it to judge how much time has passed; record nothing for it.\n\n" % (
+        "Before this text: %s\n" % before.strip("[] ") if before else "", "With this text: %s\n" % now.strip("[] ") if now else "") if before or now else ""
     already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
     earlier = "\n\n".join(t["narration"][-600:] for t in state["history"][-2:])
     user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
         describe_state(card, state, focus="%s\n%s" % (player_text, narration)), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
-        rewards + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
+        rewards + times + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 
@@ -264,6 +270,42 @@ def fill(card, state, text):
     if "{{char}}" in text and len(card.characters) == 1:
         text = text.replace("{{char}}", list(card.characters.values())[0]["name"])
     return text
+
+
+# The time and place line: one bracketed line the story model puts at the head of each reply,
+# saying the hour, the date, the exact spot and the weather. The model keeps it going from its own
+# previous line; the game takes it off the story text, shows it apart, and hands it back with the
+# reply it headed. A card can give its own form for the line, and the line the story starts on.
+DEFAULT_HEADER = "[ 🕰️ HH:MM AM/PM | 🗓️ Day # - DayOfWeek, Month DD, YYYY Era | 📍 Location - Specific area | WeatherEmoji Weather, Temp °F ]"
+_HEADER = re.compile(r"^\s*(\[[^\n]{6,400}\])[ \t]*(?:\n|$)")
+
+
+def _bracketed(line):
+    line = " ".join(line.split())
+    return line if line.startswith("[") and line.endswith("]") else "[ %s ]" % line.strip("[] ")
+
+
+def header_format(card):
+    return _bracketed(card.data["world"].get("header_format") or "") if (card.data["world"].get("header_format") or "").strip() else DEFAULT_HEADER
+
+
+def header_start(card, state):
+    """The line the card's story begins on, or "" when the card leaves that to the story model."""
+    line = (card.data["world"].get("header_start") or "").strip()
+    return fill(card, state, _bracketed(line)) if line else ""
+
+
+def split_header(text):
+    """(the time and place line or None, the story without it)."""
+    found = _HEADER.match(text)
+    if not found or not ("|" in found.group(1) or re.search(r"\d", found.group(1))):
+        return None, text
+    return " ".join(found.group(1).split()), text[found.end():].lstrip("\n")
+
+
+def _when(turn, label="Time and place: %s\n"):
+    """The time and place line a turn was given, for a helper to read. Helpers never write it."""
+    return label % turn["header"].strip("[] ") if turn.get("header") else ""
 
 
 def opening(card, state):
@@ -362,22 +404,73 @@ def _unknown_places(card, state, text=None):
     return [l for l in hidden if l["id"] in near or (l.get("name") and re.search(r"(?<!\w)%s(?!\w)" % re.escape(l["name"]), text, re.I))]
 
 
-def describe_scene(card, state):
+def witnesses(card, turn):
+    """Ids of the characters who were there for a turn: with the player when it began or when it
+    ended, or speaking in it. None for a turn played before the game kept track.
+
+    This is what lets the story model tell what each character can know. It reads the whole story;
+    a character was only there for part of it."""
+    if "there" in turn:
+        ids = turn["there"]
+    elif "with" in turn:
+        ids = sorted(set(turn["with"]) | set(d["speaker"] for d in turn.get("direction") or [] if d.get("speaker")))
+    else:
+        return None
+    return [c for c in ids if c in card.characters]
+
+
+def _present(card, turn, label="[Present: %s]"):
+    """The line that heads a past turn, saying who was there for it."""
+    ids = witnesses(card, turn)
+    if ids is None or not card.characters:
+        return ""
+    return label % (", ".join(card.characters[c]["name"] for c in ids) or "nobody but {{user}}") + "\n"
+
+
+RECENTLY = 12       # someone who joined longer ago than this many turns is no longer pointed out; the headings on the turns still say when
+
+
+def _newcomers(card, state, present):
+    """Of the characters in the scene, those who have not been there for the whole story so far,
+    with how many of the latest turns they were there for: [(id, turns)]."""
+    told = state["history"]
+    late = []
+    for who in present:
+        run = 0
+        for turn in reversed(told):
+            there = witnesses(card, turn)
+            if there is None:
+                run = len(told)                     # before the game kept track: nothing can be said
+                break
+            if who not in there:
+                break
+            run += 1
+        if run < min(len(told), RECENTLY):
+            late.append((who, run))
+    return late
+
+
+def describe_scene(card, state, knowledge=False):
     """A short briefing for the narrator on the scene as it stands: where it is, who is in it and
     what was going on. The facts are the engine's; the one line on what is happening is written by
     the scene director after each reply. It names only who is there. People who are somewhere else
     are not listed here, because a model tends to use whoever it is shown."""
     me = state["actors"][PLAYER]
     here = places(card, state).get(me["location"])
-    present = []
+    present, ids = [], []
     for who, actor in sorted(state["actors"].items()):
         if who != PLAYER and actor["location"] is not None and actor["location"] == me["location"] and not is_away(card, actor):
             present.append(actor["name"] + (" (%s)" % actor["note"] if actor.get("note") else ""))
+            ids.append(who)
     lines = ["[The scene right now]"]
     if here:
         lines.append("Place: %s." % here["name"])
     if card.characters:
         lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
+    late = _newcomers(card, state, ids) if knowledge else []
+    if late:
+        lines.append("Here only since recently: %s. Each of them saw what happened from then on, and of anything earlier only the turns headed with their name." % "; ".join(
+            "%s (%s)" % (state["actors"][who]["name"], "just arrived" if turns == 0 else "the last turn" if turns == 1 else "the last %d turns" % turns) for who, turns in late))
     if state.get("scene"):
         lines.append("What is going on: %s" % state["scene"])
     if card.characters:
@@ -571,7 +664,7 @@ def _turn_message(player_text, results):
 VOLATILE_SLOTS = ("summary", "lorebook", "state", "quests")
 
 
-def narrator_prompt(card, state, preset, player_text, results, record=True, check=False):
+def narrator_prompt(card, state, preset, player_text, results, record=True, check=False, header=False):
     """Returns (system, messages). One message carries "cache": True, marking the end of the part
     that will be identical next turn; llm.chat_request turns that into the provider's own marker.
 
@@ -604,11 +697,11 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
         "characters": lambda: describe_cast(card, settled),
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
-        "state": lambda: describe_scene(card, state) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
+        "state": lambda: describe_scene(card, state, knowledge=True) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
         "quests": lambda: describe_quests(card, state),
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
-                                                          journal.describe(journal.recall(card, state, in_play))) if part),
+                                                          journal.describe(journal.recall(card, state, in_play), card)) if part),
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
@@ -634,11 +727,19 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         stable.append(action_protocol(card, record, preset.get("prompts")))
     ## How to lay a reply out, so each paragraph can be shown under the right name. For every card.
     stable.append(prompt_text(preset.get("prompts"), "narrator_layout"))
+    if card.characters:
+        stable.append(prompt_text(preset.get("prompts"), "narrator_knowledge"))
+    if header:
+        stable.append(prompt_text(preset.get("prompts"), "narrator_header", format=header_format(card)))
 
-    messages = [{"role": "user", "content": OPENING_CUE}, {"role": "assistant", "content": opening(card, state)}]
+    ## With the time and place line on, each reply is sent back headed by the line it was given, so
+    ## the model carries the clock on from its own last line.
+    headed = lambda line, text: "%s\n\n%s" % (line, text) if header and line else text
+    messages = [{"role": "user", "content": OPENING_CUE}, {"role": "assistant", "content": headed(header_start(card, state), opening(card, state))}]
     for turn in live if history_on else []:
-        messages.append({"role": "user", "content": _entering(card, turn.get("cast")) + _turn_message(turn["player"], turn["results"])})
-        messages.append({"role": "assistant", "content": turn["narration"]})
+        ## Each finished turn is headed with who was there for it. See witnesses.
+        messages.append({"role": "user", "content": _present(card, turn) + _entering(card, turn.get("cast")) + _turn_message(turn["player"], turn["results"])})
+        messages.append({"role": "assistant", "content": headed(turn.get("header"), turn["narration"])})
     if check:
         ## For a model that thinks before answering: a checklist to go through first. See parse_narration for what happens to a check written out.
         closing.append(prompt_text(preset.get("prompts"), "narrator_check"))
@@ -722,14 +823,14 @@ def parse_suggestions(text, count):
 
 def summary_prompt(card, state, turns, prompts=None):
     system = prompt_text(prompts, "summarize")
-    scenes = "\n\n".join("Player: %s\nNarrator: %s" % (t["player"], t["narration"]) for t in turns)
+    scenes = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
     user = "[Existing summary]\n%s\n\n[New scenes]\n%s" % (state["summary"] or "(none yet)", scenes)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 
 def journal_prompt(card, state, turns, prompts=None):
     """Asks for a journal entry about one scene: the turns given, oldest first. See journal.py."""
-    scene = "\n\n".join("Player: %s\nNarrator: %s" % (t["player"], t["narration"]) for t in turns)
+    scene = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
     return prompt_text(prompts, "write_journal"), [{"role": "user", "content": fill(card, state, "[Scene]\n%s" % scene)}]
 
 
@@ -822,6 +923,47 @@ def parse_whereabouts(text, card, state=None):
         if len(update) > 1:
             updates.append(update)
     return updates
+
+
+# The world moving on: a helper that decides where people have got to while the player was not
+# with them. Without it everyone stays for ever where the story last showed them.
+
+OFFSTAGE = 25       # the most people one call is asked about
+
+
+def offstage(card, state, limit=OFFSTAGE):
+    """Ids of the people the player knows who are not with them now: those the player is closest
+    to first, then in the order they entered the story."""
+    me = state["actors"][PLAYER]
+    entered = state.get("cast", [])
+    ids = [who for who, actor in state["actors"].items()
+           if who != PLAYER and who in card.characters and actor.get("known", True) and not (actor["location"] is not None and actor["location"] == me["location"])]
+    ids.sort(key=lambda who: (-state["actors"][who].get("relationship", 0), entered.index(who) if who in entered else len(entered), who))
+    return ids[:limit]
+
+
+def world_prompt(card, state, prompts=None):
+    me = state["actors"][PLAYER]
+    here = places(card, state).get(me["location"])
+    people = []
+    for who in offstage(card, state):
+        c = card.characters[who]
+        about = " ".join((c.get("description") or "").split())
+        home = places(card, state).get(c.get("location"))
+        people.append("- %s (id: %s). %sLast known: %s.%s" % (c["name"], who, about[:200].rstrip(".") + ". " if about else "", _whereabouts(card, state, who),
+                                                               " Began the story at %s." % home["name"] if home else ""))
+    latest = "\n\n".join("%s\n%s" % (t["player"], t["narration"][-700:]) for t in state["history"][-3:])
+    user = "[Places]\n%s\n\n[The player]\nNow at %s.%s\n\n[People elsewhere]\n%s\n\n[Story so far]\n%s\n\n[Latest turns]\n%s" % (
+        ", ".join(_named(l) for l in place_list(card, state)), _named(here) if here else "a place off the map", "\nTime and place now, as the story has it: %s" % state["header"].strip("[] ") if state.get("header") else "", "\n".join(people), state.get("summary") or "(nothing before the latest turns)", latest or "(the story has only just begun)")
+    return prompt_text(prompts, "move_world"), [{"role": "user", "content": fill(card, state, user)}]
+
+
+def parse_world(text, card, state):
+    """Where the helper says people have got to, ready for state.track. Only people it was asked
+    about, and never to where the player is: only the story brings someone to the player."""
+    asked = set(offstage(card, state))
+    here = state["actors"][PLAYER]["location"]
+    return [u for u in parse_whereabouts(text, card, state) if u["id"] in asked and u.get("location", None) != "here" and not ("location" in u and u["location"] is not None and u["location"] == here)]
 
 
 def credible_whereabouts(card, state, text, updates):

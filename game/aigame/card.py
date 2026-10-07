@@ -419,6 +419,9 @@ def check_card(data):
             if slot not in SLOTS or item is None or item.get("slot") != slot:
                 p.append("%s cannot start with %r in slot %r" % (where, item_id, slot))
 
+    for key in ("header_format", "header_start"):
+        if world.get(key) is not None and (not isinstance(world[key], str) or len(world[key]) > 400 or "\n" in world[key].strip()):
+            p.append("world.%s must be one line of text, at most 400 characters" % key)
     if world.get("start_location") is not None and world["start_location"] not in loc_ids:
         p.append("world.start_location %r is not a location" % world["start_location"])
 

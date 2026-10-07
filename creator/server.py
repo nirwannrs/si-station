@@ -72,7 +72,7 @@ def preview_prompt(card, preset, key):
 PREVIEW_MODELS = {"openrouter": "anthropic/claude-opus-5.5", "nanogpt": "z-ai/glm-5.3", "anthropic": "claude-opus-5-5", "custom": "your-model", "local": "your-model"}
 
 
-def preview_turn(card, preset, provider, bookkeeper, check=False):
+def preview_turn(card, preset, provider, bookkeeper, check=False, header=True):
     """The request the game would send to the story model for one turn, a few turns into a game of
     this card: {"url", "request"}. It is made by the game's own code (the prompt builder, then the
     provider adapter), so it is the real body: the same fields, the same order, the same cache marks.
@@ -83,7 +83,7 @@ def preview_turn(card, preset, provider, bookkeeper, check=False):
     for said, reply in (("I step inside.", "(An earlier reply by the story model.)"), ("I look around.", "(The reply before this one.)")):
         state["history"].append({"player": said, "results": [], "narration": reply})
     results = [{"ok": True, "message": "(Something the game applied for the player this turn.)"}]
-    system, messages = game_prompt.narrator_prompt(card, state, preset, "I ask what is going on.", results, record=not bookkeeper, check=check)
+    system, messages = game_prompt.narrator_prompt(card, state, preset, "I ask what is going on.", results, record=not bookkeeper, check=check, header=header)
     connection = {"provider": provider, "base_url": "https://your-endpoint.example/v1" if provider == "custom" else "", "api_key": "(your key)"}
     sent = game_llm.chat_request(connection, PREVIEW_MODELS[provider], system, messages, preset.get("sampling") or {})
     return {"url": sent["url"], "request": sent["json"]}
@@ -94,8 +94,8 @@ def _preview_build(card, state, preset, key):
     reply = "(The story model's reply would be here: a few paragraphs of story.)"
     results = [{"ok": True, "message": "(Something the game applied for the player this turn.)"}]
     prompts = preset.get("prompts") if isinstance(preset.get("prompts"), dict) else {}
-    if key in ("narrator_mechanics", "narrator_prose", "leaving_prose", "narrator_records", "leaving_records", "card_instructions", "card_reminder", "narrator_layout", "narrator_check"):
-        return game_prompt.narrator_prompt(card, state, preset, said, results, record=key.endswith("records"), check=True)
+    if key in ("narrator_mechanics", "narrator_prose", "leaving_prose", "narrator_records", "leaving_records", "card_instructions", "card_reminder", "narrator_layout", "narrator_check", "narrator_knowledge", "narrator_header"):
+        return game_prompt.narrator_prompt(card, state, preset, said, results, record=key.endswith("records"), check=True, header=True)
     return {
         "resolve_actions": lambda: game_prompt.resolver_prompt(card, state, said, prompts=prompts),
         "record_changes": lambda: game_prompt.bookkeeper_prompt(card, state, said, results, reply, quests=not card.quests, prompts=prompts),
@@ -104,6 +104,7 @@ def _preview_build(card, state, preset, key):
         "suggest_choices": lambda: game_prompt.suggest_prompt(card, state, (preset.get("suggestions") or {}).get("count", 3), prompts=prompts),
         "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts),
         "write_journal": lambda: game_prompt.journal_prompt(card, state, state["history"], prompts=prompts),
+        "move_world": lambda: game_prompt.world_prompt(card, state, prompts=prompts),
     }.get(key, lambda: None)()
 
 
@@ -388,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Refused(409, "Fix the preset's problems first; the game cannot build a prompt from it as it is.")
             card = load_card(ws.folder(wanted.get("card")))
             if wanted.get("turn"):
-                return self.send_json(preview_turn(card, preset, wanted.get("provider") or "openrouter", wanted.get("bookkeeper", True) is not False, wanted.get("check") is True))
+                return self.send_json(preview_turn(card, preset, wanted.get("provider") or "openrouter", wanted.get("bookkeeper", True) is not False, wanted.get("check") is True, wanted.get("header", True) is not False))
             return self.send_json(preview_prompt(card, preset, wanted.get("key")))
         if len(parts) == 3 and parts[0] == "presets" and parts[2] == "download" and method == "GET":
             # The preset as a file to hand to someone: they add it with Import a preset file on the game's Preset screen.

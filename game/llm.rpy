@@ -832,10 +832,12 @@ init python:
             ## story model is told who they are in this turn's message, which is kept as it was sent.
             entering = aig_prompt.arrivals(card, state, text)
             stage = "write the story"
-            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper, check=params().get("check_first", False))
+            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper, check=params().get("check_first", False), header=params().get("header", True))
             reply, cut_short, broke_off = once("reply", lambda: (llm_call("main", system, messages, story_sampling()), runtime.cut_short, runtime.reply_dropped))
             runtime.cut_short = cut_short
             narration, world_actions = aig_prompt.parse_narration(reply)
+            ## The time and place line that heads the reply is not part of the story: it is shown in the bar at the top.
+            clock, narration = aig_prompt.split_header(narration) if params().get("header", True) else (None, narration)
             narration = aig_prompt.fill(card, state, narration)     # in case the model wrote the placeholder back
             if not narration:
                 del have["reply"]
@@ -846,7 +848,7 @@ init python:
                 ## a quest has moved on. Both must answer, or the turn does not go through.
                 stage = "record what the reply changed"
                 judged = bool(card.quests)
-                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"]), "actions")}
+                jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"], clock=(state.get("header"), clock)), "actions")}
                 if judged:
                     jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration, prompts=preset["prompts"]), "verdicts")
                 failed = {}
@@ -889,6 +891,11 @@ init python:
                 "narration": narration, "direction": direction}
         ## Where the player was and who with when this turn began, for the journal to tell arrivals and reunions by.
         turn.update(aig_journal.scene_facts(state["restore_point"]))
+        ## Who was there for this turn: with the player as it began or as it ended, or speaking in it.
+        ## The story model is shown this with every past turn, to tell what each character can know.
+        if clock:
+            turn["header"] = state["header"] = aig_prompt.fill(card, state, clock)
+        turn["there"] = sorted(set(turn["with"]) | set(aig_journal.scene_facts(state)["with"]) | set(d["speaker"] for d in direction if d.get("speaker")))
         if broke_off:
             turn["notice"] = ("The connection to the provider was lost while this reply was arriving, so it stops early. What had arrived is kept, "
                               "and the game has recorded what it shows. Carry on from here, or undo the turn and send it again.")
@@ -908,6 +915,7 @@ init python:
         store.game_log = (store.game_log + results)[-30:]
         store.draft = ""
         keep_journal(card, state, before, text, preset)
+        move_world(card, state, before, preset)
         summarize_if_long(card, state, preset)
 
     ## The journal (aigame/journal.py): a short entry about each scene, written when the scene ends
@@ -924,6 +932,25 @@ init python:
             return False
         aig_journal.add(card, state, start, end, place, written)
         return True
+
+    WORLD_EVERY = 15        # turns between two looks at where everyone has got to, when the player stays put
+
+    def move_world(card, state, before, preset):
+        """After a turn: when the player has gone somewhere else, or has stayed put for a good while,
+        a helper works out where the people they know have got to meanwhile. Without it everyone
+        stays where the story last showed them. A failed attempt changes nothing and is tried again
+        at the next occasion."""
+        if not params().get("world", True) or not aig_prompt.offstage(card, state):
+            return
+        went = before["actors"]["player"]["location"] != state["actors"]["player"]["location"]
+        if not went and state["turn"] - state.get("world_at", 0) < WORLD_EVERY:
+            return
+        try:
+            reply = run_helper_sure("move_world", aig_prompt.world_prompt(card, state, prompts=preset["prompts"]), "whereabouts")
+        except aig_llm.LLMError:
+            return
+        aig_state.track(card, state, aig_prompt.parse_world(reply, card, state))
+        state["world_at"] = state["turn"]
 
     def keep_journal(card, state, before, text, preset):
         """After a turn: if a scene has just ended, write its entry. A failed attempt costs nothing but
@@ -1006,7 +1033,17 @@ init python:
                 reply = ask()
             except aig_llm.LLMError:
                 reply = ""
-        aig_state.track(card, state, aig_prompt.credible_whereabouts(card, state, narration, aig_prompt.parse_whereabouts(reply, card, state)))
+        placed = aig_prompt.credible_whereabouts(card, state, narration, aig_prompt.parse_whereabouts(reply, card, state))
+        ## Someone who speaks in the scene is in it, wherever the game had them and whether or not the
+        ## text showed them coming, unless the director says outright that they are somewhere else.
+        said_where = set(u["id"] for u in placed if "location" in u)
+        here = state["actors"]["player"]["location"]
+        for d in aig_prompt.parse_direction(reply, card, len(paragraphs)):
+            who = d["speaker"]
+            if who and who not in said_where and state["actors"][who]["location"] != here:
+                placed.append({"id": who, "location": "here"})
+                said_where.add(who)
+        aig_state.track(card, state, placed)
         ## A line on how things stand, which the narrator is given back next turn. See describe_scene.
         state["scene"] = aig_prompt.parse_scene(reply)
         ## Places the text showed the player go on their map. The narrator hears of it next turn.
@@ -1098,6 +1135,23 @@ init python:
         return cast
 
     PLAY_BAR_HEIGHT = 117
+    CLOCK_LINE_HEIGHT = 34
+
+    def clock_line():
+        """The story's time and place line as it stands, for the bar at the top, or "" when the
+        player has it switched off or the story has not given one yet. See prompt.split_header."""
+        if not params().get("header", True) or not store.game_state:
+            return ""
+        line = (store.game_state.get("header") or aig_prompt.header_start(current_card(), store.game_state)).strip("[] ")
+        return line if len(line) <= 180 else line[:177].rstrip() + "..."
+
+    def clock_size():
+        """A long line is set smaller so that it stays on its one row."""
+        length = len(clock_line())
+        return 24 if length <= 120 else 20 if length <= 145 else 17
+
+    def play_bar_height():
+        return PLAY_BAR_HEIGHT + (CLOCK_LINE_HEIGHT if clock_line() else 0)
     WAITING_HEIGHT = 110        # the strip a text-only card shows under its story while a reply is awaited
 
     def story_gap():
@@ -1111,7 +1165,7 @@ init python:
                 return top, bottom - top
         ## No input on screen: everything under the bar, less the strip that says a reply is on its way.
         waiting = WAITING_HEIGHT if renpy.get_screen("thinking") else 0
-        return PLAY_BAR_HEIGHT, config.screen_height - PLAY_BAR_HEIGHT - waiting
+        return play_bar_height(), config.screen_height - play_bar_height() - waiting
 
     def story_awaiting():
         """What the player sent that is still being answered, or None. Shown under the story meanwhile."""
@@ -1359,7 +1413,7 @@ screen thinking():
         ## The bar on top is shown without its buttons: nothing should be changed mid-turn.
         frame:
             xfill True
-            ysize PLAY_BAR_HEIGHT
+            ysize play_bar_height()
             padding (60, 20)
             background "#000000b0"
             vbox:
@@ -1368,6 +1422,8 @@ screen thinking():
                     ysize 48
                     text esc(current_card().title) size 30 color "#cccccc" yalign 0.5
                 text esc(status_line()) size 24 color "#cccccc"
+                if clock_line():
+                    text esc(clock_line()) size clock_size() color "#9fc4e8" layout "nobreak"
         frame:
             xfill True
             yalign 1.0
@@ -1525,6 +1581,9 @@ screen play_bar():
                     textbutton _("History") action ShowMenu("history") text_size 30
                     textbutton _("Menu") action ShowMenu() text_size 30
             text esc(status_line()) size 24 color "#cccccc"
+            ## The story's own clock: time, date, exact spot and weather, as the story model last gave them.
+            if clock_line():
+                text esc(clock_line()) size clock_size() color "#9fc4e8" layout "nobreak"
 
 
 ## What sits under the story on the play screen: an error if the last turn failed, the suggested
@@ -1833,6 +1892,24 @@ screen parameters():
                     style_prefix "check"
                     xsize 1100
                     textbutton _("Have the story model check its reply first") action Function(flip, chosen, "check_first", False, True, False) selected chosen.get("check_first", False)
+
+            vbox:
+                spacing 6
+                label _("Time and place")
+                text _("The story keeps its own clock: the hour, the date, the exact spot and the weather, moved on by the story model as things happen and shown in the bar at the top. People in the story feel the hour and the weather. A card can give the line its own form, such as its world's calendar; otherwise it is an ordinary clock and date. Off, no line is asked for or shown.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Keep a time and place line") action Function(flip, chosen, "header", True) selected chosen.get("header", True)
+
+            vbox:
+                spacing 6
+                label _("The world moves on")
+                text _("When you go somewhere else, and now and then when you stay put, a helper (the \"Move the world on\" small task) works out where the people you know have got to in the meantime, so nobody stays for ever where the story last showed them. It costs one small call each time. Off, people stay where they were last seen until the story shows them elsewhere.") size 24
+                vbox:
+                    style_prefix "check"
+                    xsize 1100
+                    textbutton _("Let people move while I am elsewhere") action Function(flip, chosen, "world", True) selected chosen.get("world", True)
 
             vbox:
                 spacing 6
