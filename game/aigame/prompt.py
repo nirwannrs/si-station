@@ -53,7 +53,7 @@ def uses(card, need):
 PLAYER_ACTIONS = (
     ("use_item", "inventory", '{"type": "use_item", "item": ID}  eat, drink, apply or otherwise use up an item, now. Showing it, holding it, looking at it, offering it, mentioning it or saying what one will do with it later is not using it'),
     ("use_item", "inventory", '{"type": "use_item", "item": ID, "target": CHARACTER_ID}  use an item on someone else, now'),
-    ("equip", "equipment", '{"type": "equip", "item": ID}  put on an item or take it in hand to keep it there. Only when the player says they do so'),
+    ("equip", "equipment", '{"type": "equip", "item": ID}  put on an item or take it in hand to keep it there. Only when the player says they do so. For an item whose id starts with gen_, add "slot": SLOT to say where on the body it goes (head, body, hands, feet, weapon, offhand, accessory)'),
     ("unequip", "equipment", '{"type": "unequip", "slot": SLOT}  take off what is in a slot (head, body, hands, feet, weapon, offhand, accessory)'),
     ("transfer_item", "inventory", '{"type": "transfer_item", "item": ID, "qty": N, "to": CHARACTER_ID}  an item leaves the player\'s hands for good: given, handed over, paid with. Showing it to someone, holding it out to be looked at, or offering it and waiting for an answer is not handing it over'),
     ("buy", "shops", '{"type": "buy", "shop": SHOP_ID, "item": ID, "qty": N}  the player buys, orders or pays for it now. Asking the price, asking what there is, haggling or saying they might buy is not buying'),

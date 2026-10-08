@@ -233,6 +233,23 @@ class EngineTest(unittest.TestCase):
         self.ok(type="create_item", name="Tin Ring", slot="accessory")
         self.assertEqual(self.state["generated_items"]["gen_tin_ring"]["type"], "misc")
 
+    def test_a_plain_item_the_story_made_can_be_put_on(self):
+        self.ok(type="create_item", name="Wrap Dress")
+        before = copy.deepcopy(self.state)
+        left = apply_action(self.card, self.state, {"type": "equip", "item": "gen_wrap_dress"}, by_player=True)
+        self.assertIsNone(left["ok"])                                             # no slot named: left to the story, not refused
+        self.assertIn("change_item", left["message"])
+        self.assertEqual(self.state, before)
+        worn = apply_action(self.card, self.state, {"type": "equip", "item": "gen_wrap_dress", "slot": "body"}, by_player=True)
+        self.assertTrue(worn["ok"], worn["message"])
+        self.assertEqual(self.me["equipment"]["body"], "gen_wrap_dress")
+        self.assertEqual(self.state["generated_items"]["gen_wrap_dress"]["slot"], "body")
+        self.ok(type="equip", item="travel_cloak", slot="head")                   # a slot never moves real equipment
+        self.assertEqual(self.me["equipment"]["body"], "travel_cloak")
+        self.ok(type="create_item", name="Red Vial", effects=[{"stat": "hp", "amount": 3}])
+        self.rejected(type="equip", item="gen_red_vial", slot="accessory")        # only plain things: what a potion does is never worn
+        self.rejected(type="equip", item="healing_draught", slot="body")           # nor the card's own
+
     def test_created_item_can_do_something(self):
         hp = self.card.stats["hp"]
         self.ok(type="change_stat", stat="hp", amount=-5)

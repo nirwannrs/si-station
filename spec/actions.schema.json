@@ -30,7 +30,8 @@
             "properties": {
               "type": { "const": "equip" },
               "who": { "$ref": "#/$defs/who" },
-              "item": { "$ref": "#/$defs/id" }
+              "item": { "$ref": "#/$defs/id" },
+              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"], "description": "Only for a misc item the story created: where it is worn, which makes it equipment. Ignored for any other item." }
             }
           },
           {

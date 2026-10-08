@@ -103,6 +103,16 @@ def apply_action(card, state, action, by_player=False):
             # story's call, not the engine's. So this is neither applied nor refused: ok is None.
             return {"action": action, "ok": None, "message": "%s wants to go to %s, which is not next to %s. Whether and how they get there is for the story to decide." % (
                 player["name"], places(card, state)[wanted]["name"], here["name"])}
+    if by_player and action["type"] == "equip" and card.has("equipment") and action.get("slot") not in SLOTS:
+        try:
+            iid, item = _item(card, state, action)
+        except Rejected:
+            item = None
+        if item and item.get("generated") and item["type"] == "misc" and state["actors"][PLAYER]["inventory"].get(iid):
+            # A plain thing the story made, and nothing says where it would be worn. Not refused:
+            # the story is told, and can make it wearable.
+            return {"action": action, "ok": None, "message": "%s tries to put on or take up %s, which the game holds as a plain item, so it is not yet equipped. If it is something to wear or hold, make it so with change_item and its slot; %s can then equip it." % (
+                state["actors"][PLAYER]["name"], item["name"], state["actors"][PLAYER]["name"])}
     if not by_player:
         counted = _paid_already(card, state, action)
         if counted:
@@ -237,6 +247,10 @@ def _equip(card, state, a):
     if iid in who["equipment"].values():
         raise Rejected("%s already has %s equipped." % (who["name"], item["name"]))
     _need(who, iid, item, 1)
+    if item["type"] == "misc" and item.get("generated") and a.get("slot") in SLOTS and card.has("equipment"):
+        # A plain thing the story made and never said could be worn. Whoever puts it on says where
+        # it goes, and from then on it is equipment. It has no effects, so nothing is gained by it.
+        _reshape(card, state, item, {"type": "equipment", "slot": a["slot"]})
     if item["type"] != "equipment":
         raise Rejected("%s cannot be equipped." % item["name"])
     slot = item["slot"]
