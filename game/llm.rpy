@@ -873,6 +873,9 @@ init python:
                     ## the bookkeeper's report of the same reward being handed over is looked at.
                     world_actions = aig_prompt.parse_judge(have["quests"], card) + world_actions
             results = results + aig_actions.apply_actions(card, state, world_actions)
+            if params().get("header", True):
+                clock, moved = keep_time(card, state, clock, text, narration, preset, once)
+                results = results + moved
 
             state["pending_results"] = []
             stage = "direct the scene"
@@ -1020,6 +1023,28 @@ init python:
                 entry.update(edit["before"])
         input_fields.clear()
         renpy.restart_interaction()
+
+    def keep_time(card, state, line, text, narration, preset, once):
+        """Has the timekeeper put the time and place line right when the game can see it is wrong:
+        (the line to keep, results of moving the player where the reply left them).
+
+        The story model writes the line and the game only reads it (aigame/clock.py). Nearly every
+        turn the game finds nothing wrong and no call is made. The turn never fails over this: if
+        the timekeeper cannot be reached or answers nonsense, the line stays as the story wrote it."""
+        before = state.get("header") or aig_prompt.header_start(card, state)
+        problems = aig_prompt.clock_problems(card, state, before, line)
+        if not problems:
+            return line, []
+        try:
+            reply = once("clock", lambda: run_helper("keep_time", aig_prompt.timekeeper_prompt(card, state, before, line, problems, text, narration, prompts=preset["prompts"])))
+        except aig_llm.LLMError:
+            return line, []
+        fixed, place = aig_prompt.parse_timekeeper(reply, card, state, before)
+        moved = []
+        if place and place != state["actors"]["player"]["location"]:
+            ## The line was right and the books were not: the reply took the player somewhere and nobody recorded it.
+            moved = aig_actions.apply_actions(card, state, [{"type": "move", "who": "player", "location": place}])
+        return fixed or line, moved
 
     def direct_scene(card, state, narration, once=None):
         """Works out who speaks in each paragraph and with what expression, and moves the characters

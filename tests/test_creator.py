@@ -166,7 +166,7 @@ class ServerTest(unittest.TestCase):
         shutil.copy(os.path.join(ROOT, "presets", "default.preset.json"), os.path.join(self.work, "presets", "default.preset.json"))
         status, listing = self.call("GET", "/api/presets")
         self.assertEqual([(p["id"], p["builtin"], p["problems"]) for p in listing["presets"]], [("default", True, 0)])
-        self.assertEqual(len(listing["wording"]), 19)                             # every prompt the game writes itself, for the builder to show
+        self.assertEqual(len(listing["wording"]), 20)                             # every prompt the game writes itself, for the builder to show
         self.assertEqual(sorted(listing["slots"]), sorted(wording.SLOTS))
         self.assertEqual(self.call("PUT", "/api/presets/default", {"name": "Mine"})[0], 403)      # the game's own is never changed
 

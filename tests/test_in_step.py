@@ -121,6 +121,7 @@ class EditablePromptsTest(unittest.TestCase):
             "judge_quests": prompt.judge_prompt(c, s, "I wait.", "Rain.", prompts=prompts),
             "write_journal": prompt.journal_prompt(c, s, [{"player": "hi", "narration": "Rain."}], prompts=prompts),
             "move_world": prompt.world_prompt(c, s, prompts=prompts),
+            "keep_time": prompt.timekeeper_prompt(c, s, "[ 9:00 PM | Day 1 ]", "[ 8:00 PM | Day 1 ]", ["It went backwards."], "I wait.", "Rain.", prompts=prompts),
         }
         return dict((task, system) for task, (system, messages) in built.items())
 
@@ -220,6 +221,8 @@ class EditablePromptsTest(unittest.TestCase):
             "judge_quests": [prompt.judge_prompt(c, s, "I wait.", "Rain.")],
             "write_journal": [prompt.journal_prompt(c, s, s["history"])],
             "move_world": [prompt.world_prompt(c, s)],
+            "keep_time": [prompt.timekeeper_prompt(c, s, "[ 9:00 PM | Day 1 ]", "[ 8:00 PM | Day 1 ]", ["It went backwards."], "I wait.", "Rain."),
+                          prompt.timekeeper_prompt(c, s, None, None, ["No line."], "I wait.", "Rain.")],
         }
         self.assertEqual(sorted(sent), sorted(name for name, label in prompt.HELPER_TASKS))
         for task, builds in sent.items():

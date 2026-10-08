@@ -10,7 +10,7 @@ import re
 from .actions import paid_lately, shop_price
 from .card import PLAYER
 from .llm import extract_json
-from . import journal
+from . import clock, journal
 from .text import keep_marks_paired, muffled
 from .wording import prompt_text
 from .state import available_quests, cast_in_play, named_in, describe_states, limits, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
@@ -26,6 +26,7 @@ HELPER_TASKS = (
     ("judge_quests", "Judge quest progress"),
     ("write_journal", "Keep the journal (remember each scene)"),
     ("move_world", "Move the world on (where people go while the player is elsewhere)"),
+    ("keep_time", "Keep the clock (put the time and place line right when it slips)"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -325,6 +326,82 @@ def split_header(text):
     return " ".join(found.group(1).split()), text[found.end():].lstrip("\n")
 
 
+# The clock is kept by three hands. The story model writes the line. The game reads it, and knows
+# when it cannot be right: time that ran backwards, a clock that has not moved while the story went
+# on, a place that is not where the game has the player, or no line at all. Then, and only then,
+# a helper job is asked to write the line as it should be, and to say where the player is.
+STUCK = 3       # turns the clock may stand at the same minute before it is taken to be stuck
+
+
+def header_place(card, state, line):
+    """The id of the known place the line puts the player in, or None when it names none the game
+    has. The line gives the place and then the spot within it, so the longest name it opens with wins."""
+    said = _plain_name(clock.place_part(line) or "")
+    named = [(len(_plain_name(place["name"])), lid) for lid, place in places(card, state).items()
+             if _plain_name(place["name"]) and said.startswith(_plain_name(place["name"]))]
+    return max(named)[1] if named else None
+
+
+def _plain_name(text):
+    plain = "".join(c for c in text.lower() if c.isalnum())
+    return plain[3:] if plain.startswith("the") and len(plain) > 3 else plain
+
+
+def clock_problems(card, state, before, now):
+    """What is wrong with the line that heads the newest reply, as sentences for the timekeeper.
+    Empty when nothing is, which is nearly always. before is the line the story stood at."""
+    me = state["actors"][PLAYER]
+    if not now:
+        return ["The reply was given no time and place line. Write one, carried on from the line before."] if before else []
+    problems = []
+    if before and clock.went_back(before, now):
+        problems.append("The time has gone backwards from the line before. Time only runs forward.")
+    else:
+        stood = 0
+        for turn in reversed(state["history"]):
+            if not (turn.get("header") and clock.same_moment(turn["header"], now)):
+                break
+            stood += 1
+        if stood >= STUCK:
+            problems.append("The clock has stood at the same minute for %d replies while the story went on. Move it on by what this reply took." % (stood + 1))
+    at, here = header_place(card, state, now), places(card, state).get(me["location"])
+    if at and here and at != here["id"]:
+        problems.append("The line puts %s at %s, but the game has them at %s. Only one of the two can be right." % (me["name"], places(card, state)[at]["name"], here["name"]))
+    return problems
+
+
+def timekeeper_prompt(card, state, before, now, problems, player_text, narration, prompts=None):
+    me = state["actors"][PLAYER]
+    here = places(card, state).get(me["location"])
+    parts = []
+    if card.locations:
+        parts.append("[Places]\n%s\n%s is at %s, as the game has it." % (
+            ", ".join(_named(l) for l in place_list(card, state)), me["name"], _named(here) if here else "a place off the map"))
+    parts.append("[The form of the line]\n%s" % header_format(card).strip("[] "))
+    if before:
+        parts.append("[The line before]\n%s" % before.strip("[] "))
+    if now:
+        parts.append("[The line now]\n%s" % now.strip("[] "))
+    parts.append("[What is wrong]\n%s" % "\n".join("- " + p for p in problems))
+    parts.append("[The player's message]\n%s" % player_text)
+    parts.append("[The reply]\n%s" % narration)
+    return prompt_text(prompts, "keep_time"), [{"role": "user", "content": fill(card, state, "\n\n".join(parts))}]
+
+
+def parse_timekeeper(text, card, state, before):
+    """(the line as the timekeeper put it right, the id of the place it says the player is in).
+    Either is None when the answer does not give it, or gives a line that would itself be wrong:
+    the form written out unfilled, or a time earlier than the line before."""
+    parsed = extract_json(text)
+    parsed = parsed if isinstance(parsed, dict) else {}
+    line = parsed.get("line")
+    line = _bracketed(line) if isinstance(line, str) and len(line.strip("[] ")) >= 6 and "\n" not in line.strip() else None
+    if line and (_UNFILLED.search(line) or len(line) > 400 or (before and clock.went_back(before, line))):
+        line = None
+    at = parsed.get("player_at")
+    return line, at if isinstance(at, str) and at in places(card, state) else None
+
+
 def _when(turn, label="Time and place: %s\n"):
     """The time and place line a turn was given, for a helper to read. Helpers never write it."""
     return label % turn["header"].strip("[] ") if turn.get("header") else ""
@@ -538,7 +615,7 @@ def _newcomers(card, state, present):
     return late
 
 
-def describe_scene(card, state, knowledge=False):
+def describe_scene(card, state, knowledge=False, hour=False):
     """A short briefing for the narrator on the scene as it stands: where it is, who is in it and
     what was going on. The facts are the engine's; the one line on what is happening is written by
     the scene director after each reply. It names only who is there. People who are somewhere else
@@ -553,6 +630,11 @@ def describe_scene(card, state, knowledge=False):
     lines = ["[The scene right now]"]
     if here:
         lines.append("Place: %s." % here["name"])
+    ## The hour, read by the game off the story's own line and said in plain words, where the story
+    ## model is looking as it writes. A bare "18:13" at the head of an old reply is easy to lose.
+    now = clock.hour_line(state.get("header") or header_start(card, state)) if hour else None
+    if now:
+        lines.append("Time: %s. Everyone in the scene knows the hour and the day and speaks and acts by them; nobody talks of a meal, of sleep or of the day's plans as though it were some other time." % now)
     if card.characters:
         lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
     late = _newcomers(card, state, ids) if knowledge else []
@@ -785,7 +867,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
         "characters": lambda: describe_cast(card, settled),
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
-        "state": lambda: describe_scene(card, state, knowledge=True) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
+        "state": lambda: describe_scene(card, state, knowledge=True, hour=header) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
         "quests": lambda: describe_quests(card, state),
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",

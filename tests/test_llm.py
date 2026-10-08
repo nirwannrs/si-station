@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "game"))
 
-from aigame import llm, prompt  # noqa: E402
+from aigame import clock, llm, prompt  # noqa: E402
 from aigame.actions import apply_actions  # noqa: E402
 from aigame.card import Card, load_card  # noqa: E402
 from aigame.state import new_game, track  # noqa: E402
@@ -289,6 +289,75 @@ class PromptFollowsFeaturesTest(unittest.TestCase):
         state = new_game(card)
         system, messages = prompt.narrator_prompt(card, state, preset, "Hello", [])
         self.assertNotIn("<actions>", system + messages[-1]["content"])
+
+
+class ClockTest(unittest.TestCase):
+    """The story model writes the time and place line; the game reads it, tells the story the hour
+    in plain words, and has the timekeeper put the line right when it cannot be right."""
+
+    LINE = "[ \U0001F570 %s | \U0001F5D3 Day %d - Tuesday, March 3, 1422 | \U0001F4CD %s | Rain, 44 \u00b0F ]"
+
+    def setUp(self):
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            self.preset = json.load(f)
+
+    def line(self, time, day=1, place="Common Room - By the hearth"):
+        return self.LINE % (time, day, place)
+
+    def test_the_game_reads_the_hour_and_the_day(self):
+        self.assertEqual(clock.read(self.line("09:40 PM")), {"minutes": 21 * 60 + 40, "day": 1})
+        self.assertEqual(clock.read("18:13 | Day 12 since the exam"), {"minutes": 18 * 60 + 13, "day": 12})
+        self.assertEqual(clock.read("12:05 AM"), {"minutes": 5, "day": None})
+        self.assertEqual(clock.read("12:05 PM")["minutes"], 12 * 60 + 5)
+        for unreadable in ("high noon | the third bell", "25:00", "", None, "ratio 3:4:5"):
+            self.assertEqual(clock.read(unreadable), {"minutes": None, "day": None}, unreadable)
+        self.assertIn("around midday", clock.hour_line(self.line("12:10 PM")))
+        self.assertIn("middle of the night", clock.hour_line(self.line("02:00 AM")))
+        self.assertIsNone(clock.hour_line("the third bell"))
+        self.assertTrue(clock.went_back(self.line("09:40 PM"), self.line("09:10 PM")))
+        self.assertFalse(clock.went_back(self.line("11:50 PM"), self.line("12:10 AM", day=2)))      # past midnight is not backwards
+        self.assertFalse(clock.went_back("11:50 PM", "12:10 AM"))                                   # and with no day given, nothing is said
+
+    def test_the_story_is_told_the_hour_beside_the_scene(self):
+        self.state["header"] = self.line("12:10 PM")
+        tail = prompt.narrator_prompt(self.card, self.state, self.preset, "Dinner?", [], header=True)[1][-1]["content"]
+        self.assertIn("Time: 12:10 on Day 1: around midday; time for the midday meal. Everyone in the scene knows the hour", tail)
+        self.assertNotIn("Time: 12:10", prompt.narrator_prompt(self.card, self.state, self.preset, "Dinner?", [], header=False)[1][-1]["content"])
+        self.state["header"] = "[ the third bell | market day ]"                                   # a calendar the game cannot read: it says nothing
+        self.assertNotIn("\nTime: ", prompt.narrator_prompt(self.card, self.state, self.preset, "Dinner?", [], header=True)[1][-1]["content"])
+
+    def test_the_game_knows_when_the_line_cannot_be_right(self):
+        c, s = self.card, self.state
+        before = self.line("09:40 PM")
+        self.assertEqual(prompt.clock_problems(c, s, before, self.line("09:45 PM")), [])
+        self.assertEqual(prompt.clock_problems(c, s, None, None), [])
+        self.assertIn("no time and place line", prompt.clock_problems(c, s, before, None)[0])
+        self.assertIn("gone backwards", prompt.clock_problems(c, s, before, self.line("08:00 PM"))[0])
+        s["history"] = [{"player": "x", "results": [], "narration": "y", "header": before} for n in range(2)]
+        self.assertEqual(prompt.clock_problems(c, s, before, before), [])                           # two replies in the same minute can happen
+        s["history"].append(dict(s["history"][0]))
+        self.assertIn("stood at the same minute for 4 replies", prompt.clock_problems(c, s, before, before)[0])
+        s["history"] = []
+        self.assertEqual(prompt.header_place(c, s, self.line("09:45 PM", place="The Stable - by the mare's stall")), "stable")
+        self.assertIsNone(prompt.header_place(c, s, self.line("09:45 PM", place="A ditch by the road")))
+        wrong = prompt.clock_problems(c, s, before, self.line("09:45 PM", place="Stable - by the mare's stall"))
+        self.assertEqual(len(wrong), 1)
+        self.assertIn("at Stable, but the game has them at Common Room", wrong[0])
+
+    def test_the_timekeeper_puts_it_right(self):
+        c, s = self.card, self.state
+        before, now = self.line("09:40 PM"), self.line("08:00 PM", place="Stable - by the mare's stall")
+        system, messages = prompt.timekeeper_prompt(c, s, before, now, prompt.clock_problems(c, s, before, now), "I go out to the stable.", "You cross the yard.")
+        for part in ("[Places]", "Stable (stable)", "[The line before]", "[The line now]", "- The time has gone backwards", "- The line puts", "[The reply]\nYou cross the yard."):
+            self.assertIn(part, messages[0]["content"])
+        fixed = self.line("09:44 PM", place="Stable - by the mare's stall")
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": fixed, "player_at": "stable"}), c, s, before), (fixed, "stable"))
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": fixed.strip("[] "), "player_at": None}), c, s, before), (fixed, None))
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": self.line("07:00 PM"), "player_at": "the moon"}), c, s, before), (None, None))   # still backwards; no such place
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": prompt.DEFAULT_HEADER}), c, s, before), (None, None))                        # the form, not a line
+        self.assertEqual(prompt.parse_timekeeper("I think it is about ten.", c, s, before), (None, None))
 
 
 class StatesPromptTest(unittest.TestCase):

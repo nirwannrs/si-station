@@ -369,6 +369,19 @@ Leave a person out when they would still be where the game has them. Never give 
 Reply with JSON only: {"whereabouts": [{"id": "some_id", "location": "some_location_id", "note": "..."}]}""")
 
 
+_builtin('keep_time', 'helper', "Keep the clock", "Puts the time and place line right when the game finds it wrong: time that ran backwards or stood still, a place that is not where the game has the player, or no line at all. It is only asked then, which is seldom.",
+         {}, """\
+You keep the clock of a text adventure. Every reply of the story is headed by one line that gives the hour, the date, the place and the weather. The game has found something wrong with the newest line and tells you what. Write the line as it should be.
+
+- Keep the form of the line exactly: the same parts, in the same order, with the same symbols. Change only what has to change.
+- Time only runs forward. Work out how long the reply took from what happens in it: a few minutes for talk, longer for work, a walk or a meal, hours for sleep or a journey. Add that to the line before. When midnight passes, the day and the date move on with it.
+- Say where the player is by the end of the reply, as player_at: a place id from [Places]. Go only by what the reply shows. If it shows them arrive somewhere, that is where they are. If it does not show them leave, they are where the game has them, whatever the line says. Use null when there is no list of places or no telling.
+- The place in the line is the place you gave as player_at, then the exact spot within it.
+- Leave the weather as it is unless hours have passed.
+
+Reply with JSON only: {"line": "[ ... ]", "player_at": "place_id"}""")
+
+
 _builtin('write_journal', 'helper', "Keep the journal", "Writes a short entry about a scene once it is over, so the story model can be reminded of it much later.",
          {}, """\
 You keep the journal of a text adventure. A scene has just ended; it is given to you in full. Write one entry about it, so that the narrator can be reminded of this scene much later, when the scene itself is long out of sight.
@@ -456,5 +469,13 @@ _sends("move_world", _HELPER,
        ("[People elsewhere]", "up to 25 people the player knows who are not with them: who each is, where the game last had them, and where they began", "The card's characters, and the save for where each one is.", "card:characters"),
        ("[Story so far]", "the running summary", "The save: written by Summarize old turns.", "preset:helpers/summarize"),
        ("[Latest turns]", "the last three turns", "The save: what the player typed and the end of each reply.", None))
+_sends("keep_time", _HELPER + " It is only called on a turn where the game has found the time and place line wrong.",
+       ("[Places]", "every place the game has, with its id, and where the game has the player; only for cards with a map", "The card's locations, plus any the story has made, and the save for where the player is.", "card:locations"),
+       ("[The form of the line]", "the pattern the line follows", "A card can give its own under World; otherwise the game's usual one is used.", "card:world"),
+       ("[The line before]", "the line the story stood at before this reply; only when there is one", "The story model wrote it at the head of its previous reply, or the card gave it as the line the story starts on.", "preset:story/narrator_header"),
+       ("[The line now]", "the line that heads the newest reply; left out when the reply had none", "The story model, this turn.", "preset:story/narrator_header"),
+       ("[What is wrong]", "what the game found: time gone backwards, a clock that has not moved for several replies, a place that is not where the game has the player, or no line", "The game: it reads the hour, the day number and the place off the line and compares them with the line before and with the save.", None),
+       ("[The player's message]", "what the player just typed", "The player, this turn.", None),
+       ("[The reply]", "the reply the line heads", "The story model's reply this turn.", "preset:instructions"))
 _sends("write_journal", _HELPER,
        ("[Scene]", "the scene that just ended, turn by turn", "The save: every turn since the last journal entry, word for word, each as what the player typed and what the story model replied. The game decides where a scene ends: the player goes somewhere else, an objective is finished, a fight is over, or twenty turns have passed.", None))

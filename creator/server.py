@@ -105,6 +105,8 @@ def _preview_build(card, state, preset, key):
         "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts),
         "write_journal": lambda: game_prompt.journal_prompt(card, state, state["history"], prompts=prompts),
         "move_world": lambda: game_prompt.world_prompt(card, state, prompts=prompts),
+        "keep_time": lambda: game_prompt.timekeeper_prompt(card, state, "(The line that headed the reply before.)", "(The line that heads this reply.)",
+                                                           ["(What the game found wrong with the line.)"], said, reply, prompts=prompts),
     }.get(key, lambda: None)()
 
 
