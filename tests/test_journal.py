@@ -91,14 +91,37 @@ class JournalTest(unittest.TestCase):
         self.state["journal"] += [dict(self.state["journal"][0], id=10 + n, title="More %d" % n, end=4) for n in range(5)]
         self.assertEqual(len(journal.recall(self.card, self.state, "the courier")), 1 + journal.RECALLED)       # never a flood
 
+    def test_the_scene_that_is_meant_is_found_among_scenes_that_share_a_name(self):
+        """A companion is named in nearly every entry. The one scene with the subject in it must
+        still come up, even when the player uses another word for it than the entry does."""
+        me = self.state["actors"]["player"]["name"]
+        self.state["history"] = [{"player": "p", "results": [], "narration": "n", "header": "[ 11:%02d | Day 1 ]" % n} for n in range(20)]
+        for n, (title, keywords) in enumerate((("Mira's welcome", ["Mira", "kettle"]), ("Lunch and a yard duel", ["Mira", "Tobin", "boar bet"]),
+                                               ("Broom race, silence bet", ["Mira Oakhand", "Tobin", "broom race"]), ("First dinner", ["Mira", "six cups"]), ("A quiet hour", ["Mira"]))):
+            journal.add(self.card, self.state, n * 4, n * 4 + 4, "common_room", {"title": title, "content": "The player and Mira talked; the player's bet stands.", "keywords": keywords})
+        self.state["summarized"] = 20
+        self.assertEqual(self.state["journal"][0]["content"], "%s and Mira talked; %s's bet stands." % (me, me))     # filed under the name, not "the player"
+        self.assertEqual(journal.by_name("the player character", me), "the player character")
+        self.assertIn("Broom race, silence bet", self.titles("Mira, did you see how I raced her at noon?"))            # "raced" finds the race, over four other scenes with Mira in them
+        self.assertEqual(self.titles("That duel at noon, Mira.")[-1:], ["A quiet hour"])                                # only her name to go by: the latest ones, as before
+        self.assertIn("Lunch and a yard duel", self.titles("That duel at noon, Mira."))
+        listed = journal.timeline(self.card, self.state)
+        self.assertIn("\n- Day 1, 11:08: Broom race, silence bet (there: Mira Oakhand)\n", listed)                                             # and every scene is always named, with when it was
+        self.assertEqual(listed.count("\n- "), 5)
+        self.state["journal"] += [dict(self.state["journal"][0], id=50 + n, title="Scene %d" % n) for n in range(60)]
+        self.assertEqual(journal.timeline(self.card, self.state).count("\n- "), journal.LISTED)                    # never an endless list
+
     def test_recalled_entries_travel_with_the_summary_and_not_in_the_cached_part(self):
         self.entries()
         self.state["summarized"], self.state["summary"] = 8, "The player came to the inn."
         system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "Who had the courier's letter?", [], record=False)
         last = messages[-1]["content"]
-        self.assertIn("[Story so far]\nThe player came to the inn.\n\n[Remembered from earlier in the story]\n- Tobin's lie: Tobin swore he never saw the courier.", last)
+        self.assertIn("[Story so far]\nThe player came to the inn.\n\n[What has happened so far, scene by scene]\n- Tobin's lie (there: Tobin)\n- The cellar door (there: Mira Oakhand)\nAll of these happened", last)
+        self.assertNotIn("A debt (", last)                                                   # that scene is still in the prompt: it needs no line
+        self.assertIn("\n\n[Remembered from earlier in the story]\n- Tobin's lie: Tobin swore he never saw the courier.", last)
+        self.assertNotIn("scene by scene", system)
         self.assertNotIn("Remembered from earlier", system)
-        self.assertNotIn("cellar door", last)                                               # only what this turn calls for
+        self.assertNotIn("The cellar was locked", last)                                               # only what this turn calls for
         quiet = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [], record=False)[1][-1]["content"]
         self.assertNotIn("Remembered from earlier", quiet)
 

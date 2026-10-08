@@ -875,6 +875,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         "quests": lambda: describe_quests(card, state),
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
+                                                          journal.timeline(card, state),
                                                           journal.describe(journal.recall(card, state, in_play), card)) if part),
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
@@ -1005,7 +1006,7 @@ def summary_prompt(card, state, turns, prompts=None):
 def journal_prompt(card, state, turns, prompts=None):
     """Asks for a journal entry about one scene: the turns given, oldest first. See journal.py."""
     scene = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
-    return prompt_text(prompts, "write_journal"), [{"role": "user", "content": fill(card, state, "[Scene]\n%s" % scene)}]
+    return fill(card, state, prompt_text(prompts, "write_journal")), [{"role": "user", "content": fill(card, state, "[Scene]\n%s" % scene)}]
 
 
 # The scene director: decides, for each paragraph the narrator wrote, who is speaking and how they look.

@@ -14,6 +14,7 @@ quest is finished, a fight is over. A scene that just goes on is closed after MA
 
 import re
 
+from . import clock
 from .card import PLAYER
 from .llm import extract_json
 from .state import named_in
@@ -23,6 +24,7 @@ MAX_SCENE = 20      # a scene with no visible end is closed after this many turn
 KEPT_BACK = 2       # ...leaving its newest turns for the next entry, since it is still going on
 LONGEST = 30        # the most turns one entry is written from
 RECALLED = 3        # the most entries sent in one turn, pinned ones aside
+LISTED = 40         # the most scenes named in the list of what has happened, newest kept
 
 
 def _quest_marks(state):
@@ -70,6 +72,9 @@ def add(card, state, start, end, place, written):
     turns = state["history"][start:end]
     told = "\n".join("%s\n%s" % (t["player"], t["narration"]) for t in turns)
     entries = state.setdefault("journal", [])
+    # The scene is given to the helper as "Player:" and "Narrator:", and it sometimes writes "the
+    # player" for the person it is about. The story model reads these entries: they use the name.
+    written = dict(written, title=by_name(written["title"], state["actors"][PLAYER]["name"]), content=by_name(written["content"], state["actors"][PLAYER]["name"]))
     entry = dict(written, id=1 + max([e["id"] for e in entries] or [0]), start=start, end=end, place=place,
                  who=named_in(card, told + "\n" + written["content"]), pinned=False)
     when = [t["header"] for t in turns if t.get("header")]
@@ -81,6 +86,28 @@ def add(card, state, start, end, place, written):
     entries.append(entry)
     state["journal_upto"] = max(state.get("journal_upto", 0), end)
     return entry
+
+
+def by_name(text, name):
+    """The text with "the player" put as the player's character's name."""
+    return re.sub(r"\b[Tt]he player\b(?! character)", lambda m: name, text) if name else text
+
+
+_COMMON = frozenset("with from into over that this then them they their there after before about what when where while first last".split())
+
+
+def _terms(entry):
+    """What brings an entry to mind, each with how much a mention of it counts: its keywords
+    whole, and at half weight the longer single words of its keywords and its title, so that
+    "Noelle" finds the scene filed under "Noelle Silva" and "race" the one titled "Broom race"."""
+    terms = {}
+    for keyword in entry.get("keywords", []):
+        terms[keyword.lower()] = 1.0
+    for phrase in entry.get("keywords", []) + [entry.get("title", "")]:
+        for word in re.findall(r"[^\W\d_]{4,}", phrase.lower()):
+            if word not in _COMMON:
+                terms.setdefault(word, 0.5)
+    return terms
 
 
 def recall(card, state, text, limit=RECALLED):
@@ -102,15 +129,24 @@ def recall(card, state, text, limit=RECALLED):
     arrived = "place" in last and last["place"] != me["location"]
     joined = present - set(last["with"]) if "with" in last else set()
     low = text.lower()
-    pinned, scored = [], []
+    pinned, found = [], []
     for entry in state.get("journal", []):
         if entry.get("pinned"):
             pinned.append(entry)
-            continue
-        if entry["end"] > gone:
-            continue
-        hits = sum(1 for k in entry.get("keywords", []) if re.search(r"(?<!\w)%s(?!\w)" % re.escape(k.lower()), low))
-        score = 3 * hits + (2 if arrived and entry.get("place") and entry["place"] == me["location"] else 0) + (1 if joined & set(entry.get("who", [])) else 0)
+        elif entry["end"] <= gone:
+            # A word also counts where it only begins one in the text: "duel" finds "dueled".
+            found.append((entry, dict((term, weight) for term, weight in _terms(entry).items() if re.search(r"(?<!\w)%s%s" % (re.escape(term), r"(?!\w)" if " " in term else r"\w{0,3}(?!\w)"), low))))
+    # A word that many scenes share says little about which one is meant. A companion's name is in
+    # nearly every entry and must not crowd out the one scene that has the subject in it, so each
+    # mention is worth less the more entries it brings up.
+    shared = {}
+    for entry, hits in found:
+        for term in hits:
+            shared[term] = shared.get(term, 0) + 1
+    scored = []
+    for entry, hits in found:
+        score = sum(3.0 * weight / shared[term] for term, weight in hits.items())
+        score += (2 if arrived and entry.get("place") and entry["place"] == me["location"] else 0) + (1 if joined & set(entry.get("who", [])) else 0)
         if score:
             scored.append((score, entry["end"], entry))
     scored.sort(key=lambda item: (-item[0], -item[1]))
@@ -124,6 +160,29 @@ def scene_facts(state):
     me = state["actors"][PLAYER]
     return {"place": me["location"],
             "with": sorted(who for who, actor in state["actors"].items() if who != PLAYER and actor["location"] is not None and actor["location"] == me["location"])}
+
+
+def timeline(card, state):
+    """Every scene whose turns the story model no longer sees, one line each, oldest first: when
+    it was, what it is called, and who of the people named in it was there. It is sent every turn.
+
+    Being reminded of a scene in full depends on something bringing it to mind, and that can miss:
+    the player calls a race a duel, and the entry about the race stays unsent. Then someone who
+    stood and watched it is written as never having heard of it. With this list the story model
+    always knows the scene happened and who saw it, even when it is not given the details."""
+    gone, lines = state.get("summarized", 0), []
+    for entry in state.get("journal", []):
+        if entry["end"] > gone:
+            continue
+        read = clock.read(entry.get("when", ""))
+        when = ", ".join(part for part in ("Day %d" % read["day"] if read["day"] is not None else "",
+                                           "%02d:%02d" % (read["minutes"] // 60, read["minutes"] % 60) if read["minutes"] is not None else "") if part)
+        seen = [card.characters[c]["name"] for c in entry.get("who", []) if c in card.characters and c in entry.get("there", entry.get("who", []))]
+        lines.append("- %s%s%s" % (when + ": " if when else "", entry["title"], " (there: %s)" % ", ".join(seen[:8]) if seen else ""))
+    if not lines:
+        return ""
+    return ("[What has happened so far, scene by scene]\n%s\nAll of these happened, and whoever is named with a scene was there and remembers it. "
+            "Where a scene is not told in full below, you have only its title: do not make up what happened in it, and have nobody who was there deny it or speak as though it never took place." % "\n".join(lines[-LISTED:]))
 
 
 def describe(entries, card=None):

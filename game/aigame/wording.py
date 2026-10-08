@@ -386,7 +386,7 @@ _builtin('write_journal', 'helper', "Keep the journal", "Writes a short entry ab
          {}, """\
 You keep the journal of a text adventure. A scene has just ended; it is given to you in full. Write one entry about it, so that the narrator can be reminded of this scene much later, when the scene itself is long out of sight.
 
-Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with the player changed, and what was left unfinished. Use names. Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
+Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with {{user}} changed, and what was left unfinished. Use names: the scene is marked "Player:" for what {{user}} did and said, and you write of them as {{user}}, never as "the player". Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
 
 Give it a short title, and three to six keywords: the names, places, objects and subjects that, if they came up again, should bring this scene to mind. Use the words the story used.
 

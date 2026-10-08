@@ -237,6 +237,11 @@ def reconcile(card, state):
             item["type"] = "misc"
             item.pop("slot", None)
 
+    for entry in state.get("journal", []):
+        # Entries from before the journal was made to use the player's character's name.
+        for part in ("title", "content"):
+            entry[part] = re.sub(r"\b[Tt]he player\b(?! character)", lambda m: state["actors"][PLAYER]["name"], entry.get(part, ""))
+
     for who in [w for w in state["actors"] if w not in fresh["actors"]]:
         notes.append("%s is no longer in this card." % state["actors"].pop(who)["name"])
     for who, starting in fresh["actors"].items():
