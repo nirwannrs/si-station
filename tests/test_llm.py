@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -316,11 +317,20 @@ class StatesPromptTest(unittest.TestCase):
         self.assertEqual([n["ok"] for n in notes], [None])
         for part in ["cannot speak (mouth shut)", "what they meant, not what anyone heard", "a guess can be wrong", "never the wording"]:
             self.assertIn(part, notes[0]["message"])
-        said = 'I shout "Run, Mira!"'
-        self.assertEqual(prompt.heard_as(card, state, said), 'I shout "Mmh, Mnnn!"')
-        self.assertIn('What came out of them, to quote if you tell it: "Mmh, Mnnn!"', prompt.sense_notes(card, state, said)[0]["message"])
-        self.assertEqual(prompt.heard_as(card, state, "I'm still me, you know? *I tug at the knot* (ooc: hi) Let go!"),
-                         "Hmm nnngh mm, mph mmmf? *I tug at the knot* (ooc: hi) Mnn mr!")
+        said = 'I shout "Run, Mira! RUN, I said, run run run!"'
+        heard = prompt.heard_as(card, state, said)
+        self.assertEqual(heard, prompt.heard_as(card, state, said))                                 # the same every time it is worked out
+        noise = re.match(r'I shout "(.+)"$', heard).group(1)
+        self.assertIsNone(re.search(r"[aeiouy]", noise.lower()), noise)                             # a shut mouth makes no vowels
+        words = re.findall(r"[a-z]+", noise.lower())
+        self.assertEqual(len(words), 8)
+        self.assertGreaterEqual(len(set(words)), 6, noise)                                          # the same word is not the same sound each time
+        self.assertTrue(all(a != b for a, b in zip(words, words[1:])), noise)
+        self.assertTrue(noise[0].isupper() and words[2].upper() in noise and noise.endswith("!"), noise)
+        self.assertIn('What came out of them, to quote if you tell it: "%s"' % noise, prompt.sense_notes(card, state, said)[0]["message"])
+        mixed = prompt.heard_as(card, state, "I'm still me, you know? *I tug at the knot* (ooc: hi) Let go!")
+        self.assertIn(" *I tug at the knot* (ooc: hi) ", mixed)                                     # what is done, and asides, stay as typed
+        self.assertIsNone(re.search(r"[aeiouy]", mixed.replace("*I tug at the knot* (ooc: hi)", "").lower()), mixed)
         self.assertIsNone(prompt.heard_as(card, state, "I walk to the door and try the handle."))   # nothing marks any of it as speech
         with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
             sent = prompt.narrator_prompt(card, state, json.load(f), said, notes)[1][-1]["content"]

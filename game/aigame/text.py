@@ -1,5 +1,6 @@
 """Turns the light formatting people and models write (*italic*, **bold**) into Ren'Py text tags."""
 
+import random
 import re
 
 _RULES = (
@@ -58,22 +59,29 @@ def keep_marks_paired(pieces):
     return fixed
 
 
-# What a mouth that cannot form words lets out. A word always comes out as the same sound, so a
-# message reads the same every time it is shown.
-_MUFFLES = ("mmph", "mmh", "nngh", "hmm", "mrrf", "mnn", "hnn", "mmf", "nnh", "mph")
+# What a mouth that cannot form words lets out: hums, grunts and breath through the nose, built
+# from the sounds a closed mouth can still make. There is never a vowel in it, since a vowel needs
+# the mouth open.
+_SOUNDS = ("mmph", "mmf", "mph", "hmph", "nngh", "mmh", "hmm", "mrph", "mmrf", "nnf", "hnn", "mnf", "ngh", "mmgh", "hmf", "mrrm",
+           "nmph", "hnngh", "mrgh", "fmm", "gmph", "mhm", "nnh", "mrf", "hrm", "mnn", "rmph", "mmn", "grm", "hmn", "mff", "nph")
+_SHORT = ("mm", "mh", "hm", "hn", "nn", "mf", "ng", "nh")
 _WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
 _QUOTED = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
 _ACTED = re.compile(r"(\*+[^*\n]+\*+|\([^()\n]*\))")
 
 
-def _muffle_word(match):
-    word = match.group(0)
-    sound = _MUFFLES[sum(ord(c) for c in word.lower()) % len(_MUFFLES)]
-    if len(word) <= 2:
-        sound = sound[:2]
-    elif len(word) > len(sound):
-        sound = sound[0] + sound[1] * (min(len(word), 8) - len(sound) + 1) + sound[2:]
-    return sound.capitalize() if word[0].isupper() else sound
+def _muffle(word, pick, last):
+    """One word as muffled sound, about as long as the word, and never the sound just made."""
+    for attempt in range(8):
+        sound = pick.choice(_SHORT if len(word) <= 2 else _SOUNDS)
+        # A longer word is the same sound held longer: one of its hums or growls drawn out.
+        held = [n for n, c in enumerate(sound) if c in "mnr"]
+        if held and len(word) > len(sound):
+            at = pick.choice(held)
+            sound = sound[:at] + sound[at] * (min(len(word), 8) - len(sound)) + sound[at:]
+        if sound != last:
+            break
+    return sound.upper() if len(word) > 1 and word.isupper() else sound.capitalize() if word[0].isupper() else sound
 
 
 def muffled(text):
@@ -81,11 +89,19 @@ def muffled(text):
     to muffled noise, the spoken pieces as they came out). What is spoken is whatever stands in
     double quotes; in a message with none that sets its actions in *asterisks*, it is everything
     outside them. A message that marks neither is left as typed, since nothing tells its speech
-    from what its writer does."""
+    from what its writer does. Every word becomes a different sound, picked at random but the same
+    each time for the same message."""
     said = []
+    # The same message always comes out the same, however often it is worked out, while each word
+    # in it gets a sound of its own.
+    pick, last = random.Random(text), [""]
+
+    def word(match):
+        last[0] = _muffle(match.group(0), pick, last[0].lower())
+        return last[0]
 
     def sound(piece):
-        out = _WORD.sub(_muffle_word, piece)
+        out = _WORD.sub(word, piece)
         if out.strip() and out != piece:
             said.append(out.strip())
         return out
