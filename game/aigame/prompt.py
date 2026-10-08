@@ -45,8 +45,6 @@ def uses(card, need):
         return bool(card.locations) and card.data["rules"].get("allow_generated_locations", True)
     if need == "new_items":
         return card.has("inventory") and card.allow_generated_items
-    if need == "new_gear":
-        return card.has("equipment") and card.allow_generated_items
     return card.has(need)
 
 
@@ -67,13 +65,11 @@ PLAYER_ACTIONS = (
 
 NARRATOR_ACTIONS = (
     ("inventory", '{"type": "add_item", "who": WHO, "item": ID, "qty": N}  an existing item is found, looted or received from the world'),
-    ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "..."}  a new item that is not in the item list'),
-    ("new_gear", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "slot": SLOT, "effects": [{"stat": STAT_ID, "amount": N}]}  a new item that can be worn or held: clothing, armour, jewellery, a weapon. SLOT is where it goes (head, body, hands, feet, weapon, offhand, accessory). effects is what it adds to a stat for as long as it is worn; leave it out for ordinary things, which is most of them'),
-    ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "kind": "consumable", "effects": [{"stat": STAT_ID, "amount": N}]}  a new item that is gone once used: food, a drink, a potion, a salve. effects is what using it does to a stat; leave it out when it does nothing a stat measures'),
-    ("new_items", '{"type": "change_item", "item": ID, "kind": "misc" or "consumable" or "equipment", "slot": SLOT, "effects": [...], "name": "...", "description": "..."}  an item the story itself made earlier (its id starts with gen_) has become something else, or turns out to be more than it seemed: cloth sewn into a cloak, a vial found to heal, a charm that has lost its power. Give only the parts that change. kind "misc" makes it a plain thing again'),
+    ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "kind": KIND, "slot": SLOT, "effects": [{"stat": STAT_ID, "amount": N}]}  a new item that is not in the item list. kind, slot and effects are only for an item that needs them: kind is "consumable" for something used up, or "equipment" for something worn or held, which takes a slot (head, body, hands, feet, weapon, offhand, accessory). effects is what it does to a stat when used, or while worn'),
+    ("new_items", '{"type": "change_item", "item": ID, "kind": KIND, "slot": SLOT, "effects": [...], "name": "...", "description": "..."}  an item the story itself made (its id starts with gen_) has become something else. Give only what changes; kind "misc" makes it a plain thing again'),
     ("inventory", '{"type": "remove_item", "who": WHO, "item": ID, "qty": N}  an item is lost, broken or taken away by the world, whether it was carried or worn'),
-    ("equipment", '{"type": "equip", "who": WHO, "item": ID}  by the end of the text someone is wearing or holding an item they have, and it was not their own listed action: another person dresses them, a sword is pressed into their hand and they keep it. Not for {{user}} putting something on themselves; the game has that already'),
-    ("equipment", '{"type": "unequip", "who": WHO, "item": ID}  something someone was wearing or holding comes off and they still have it: it slips off, is pulled off, is put away. When it is gone from them altogether use remove_item, or transfer_item when another person takes it'),
+    ("equipment", '{"type": "equip", "who": WHO, "item": ID}  someone ends the text wearing or holding an item they have. Not for what {{user}} put on by their own listed action'),
+    ("equipment", '{"type": "unequip", "who": WHO, "item": ID}  something worn or held comes off and stays with its owner. When it leaves them, use remove_item or transfer_item'),
     ("inventory", '{"type": "transfer_item", "item": ID, "qty": N, "from": WHO, "to": WHO}  one character hands an item to another'),
     ("inventory", '{"type": "use_item", "who": WHO, "item": ID, "target": WHO}  a character uses up an item'),
     ("money", '{"type": "change_money", "who": WHO, "amount": N}  money gained (positive) or lost (negative) outside a shop'),
@@ -82,7 +78,7 @@ NARRATOR_ACTIONS = (
     ("skills", '{"type": "use_skill", "who": CHARACTER_ID, "skill": SKILL_ID, "target": WHO}  a character other than the player uses one of their skills'),
     ("skills", '{"type": "unlock_skill", "who": WHO, "skill": SKILL_ID}  someone learns a skill through the story'),
     ("levels", '{"type": "gain_xp", "who": WHO, "amount": N}  experience for something achieved: about 10 for a small success, 30 for a real fight or a clever solution, 100 for a major victory'),
-    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state, as [States] describes one: falls asleep, is taken prisoner, sinks into grief. state is an id from that list, or a short name of your own for another lasting condition. The note says how it came about or who caused it, in a few words. With a name of your own, add "stops": [...] when the condition keeps them from something: any of speech, sight, hearing, move, items, equipment, skills, trade, attack, or all for every action (gagged stops speech, blindfolded stops sight, hands bound stops items, equipment and attack). Leave it out for a condition that stops nothing'),
+    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state, as [States] describes one: falls asleep, is taken prisoner, sinks into grief. state is an id from that list, or a short name of your own for another lasting condition. The note says how it came about or who caused it, in a few words. With a name of your own, add "stops": [...] when the condition keeps them from something: any of speech, sight, hearing, move, items, equipment, skills, trade, attack, or all for every action. Leave it out for a condition that stops nothing'),
     ("states", '{"type": "clear_state", "who": WHO, "state": STATE_ID}  the state ends: they wake, break free, come back'),
     ("relationships", '{"type": "change_relationship", "who": CHARACTER_ID, "amount": N}  how that character feels about the player shifts: usually -5 to +5, up to 15 for a moment that truly matters'),
     ("battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  a fight breaks out with these characters. The game then runs the fight itself, blow by blow, so end your reply at the moment it starts: do not narrate blows, damage or who wins'),
@@ -489,14 +485,11 @@ LIMIT_MEANS = {
 # voice, sight or hearing, the story model still reads every word of it, and left alone it has the
 # others answer those words. So the turn's message carries a note saying how the message lands.
 SENSE_NOTES = {
-    "speech": "%(name)s cannot speak (%(state)s). Anything they say in this message is what they meant, not what anyone heard: it left them as muffled or wordless sound. "
-              "The others answer only what reached them: the noise and its tone, a look, a gesture, what is going on around them. They ask what was meant or they guess, and a guess can be wrong. "
-              "Someone grasps the meaning only where there is a real reason: a power that carries thoughts, a sign the two agreed on, or knowing %(name)s well enough to read them (long company%(bond)s), "
-              "and even then they get the gist, never the wording. How much each person understands is yours to decide by who they are; nobody answers the words as though they had been heard.",
-    "sight": "%(name)s cannot see (%(state)s). Tell this turn to them through what they hear, feel, smell and are told. They do not know what anything looks like, who has come in silently, or what is done out of their reach, "
-             "and whatever in their message depends on seeing is a guess or a grope that may go wrong.",
-    "hearing": "%(name)s cannot hear (%(state)s). What others say does not reach them as words: tell it as it looks (lips moving, faces, gestures) and let them learn what was said only if it is shown, written, signed or reaches them some other way. "
-               "Whatever in their message answers something said aloud is them guessing.",
+    "speech": "%(name)s cannot speak (%(state)s). What they say in this message is what they meant, not what was heard: it came out as muffled or wordless sound. "
+              "Others respond only to what reached them, and may ask or guess, rightly or wrongly. Someone understands the meaning only where the story gives a real reason "
+              "(a power, an agreed sign, knowing %(name)s closely%(bond)s), and then only the gist.",
+    "sight": "%(name)s cannot see (%(state)s). Tell this turn through their other senses; whatever in their message depends on seeing is a guess.",
+    "hearing": "%(name)s cannot hear (%(state)s). Speech does not reach them as words; whatever in their message answers something said aloud is a guess.",
 }
 
 
@@ -639,7 +632,7 @@ def describe_scene(card, state, knowledge=False, hour=False):
     ## model is looking as it writes. A bare "18:13" at the head of an old reply is easy to lose.
     now = clock.hour_line(state.get("header") or header_start(card, state)) if hour else None
     if now:
-        lines.append("Time: %s. Everyone in the scene knows the hour and the day and speaks and acts by them; nobody talks of a meal, of sleep or of the day's plans as though it were some other time." % now)
+        lines.append("Time: %s. Everyone in the scene knows the hour and the day and acts by them." % now)
     if card.characters:
         lines.append("With %s: %s" % (me["name"], "; ".join(present) + "." if present else "nobody else."))
     late = _newcomers(card, state, ids) if knowledge else []

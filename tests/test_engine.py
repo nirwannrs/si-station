@@ -252,18 +252,29 @@ class EngineTest(unittest.TestCase):
         self.ok(type="set_state", state="asleep")
         self.assertEqual([what for what, name in limits(self.card, self.me)], ["all", "speech", "sight", "hearing"])
 
-    def test_what_the_player_does_with_a_thing_they_do_not_carry_is_left_to_the_story(self):
+    def test_what_the_player_does_with_something_the_game_does_not_have_is_left_to_the_story(self):
+        """The helper that reads the player's message can only answer in game actions. When what
+        it names is not there to act on, the engine rules on nothing and the story decides."""
         before = copy.deepcopy(self.state)
-        for attempt in ({"type": "use_item", "item": "stew"},                      # a real item, not theirs: the bowl on the table
-                        {"type": "use_item", "item": "cup of wine"},               # no item at all
+        for attempt in ({"type": "use_item", "item": "stew"},                      # a real item that is not theirs
+                        {"type": "use_item", "item": "cup of wine"},               # no such item
                         {"type": "equip", "item": "a coat from the chair"},
-                        {"type": "transfer_item", "item": "stew", "to": "mira"}):
+                        {"type": "transfer_item", "item": "stew", "to": "mira"},
+                        {"type": "transfer_item", "item": "healing_draught", "to": "the stranger"},   # no such person
+                        {"type": "move", "location": "the kitchen"},               # no such place
+                        {"type": "use_skill", "skill": "time stop"},               # no such skill
+                        {"type": "start_battle", "enemies": ["a passing thug"]},
+                        {"type": "buy", "shop": "the pedlar", "item": "stew"}):
             left = apply_action(self.card, self.state, attempt, by_player=True)
-            self.assertIsNone(left["ok"], left["message"])
-            self.assertIn("carries none", left["message"])
+            self.assertIsNone(left["ok"], "%s: %s" % (attempt, left["message"]))
+            self.assertIn("nothing the game tracks was used or changed", left["message"])
+            self.assertFalse(apply_action(self.card, self.state, attempt)["ok"], attempt)          # the narrator's own slip is still refused
         self.assertEqual(self.state, before)
         self.assertTrue(apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)["ok"])
-        self.rejected(type="use_item", item="stew")                                # the narrator's own slip is still refused
+        # What the game does have, it still rules on: too little money, more than they hold.
+        self.me["money"] = 0
+        self.assertIs(apply_action(self.card, self.state, {"type": "buy", "shop": "lantern_bar", "item": "stew"}, by_player=True)["ok"], False)
+        self.assertIs(apply_action(self.card, self.state, {"type": "transfer_item", "item": "belt_knife", "qty": 5, "to": "mira"}, by_player=True)["ok"], False)
 
     def test_what_is_worn_can_fall_off_be_lost_or_handed_over(self):
         self.ok(type="unequip", item="Travel Cloak")                              # named by the item, not the slot

@@ -400,7 +400,7 @@ class StatesPromptTest(unittest.TestCase):
         self.assertEqual(state["actors"]["player"]["states"]["mouth_shut"]["stops"], ["speech"])    # what is not a real limit is dropped
         notes = prompt.sense_notes(card, state)                                                     # how the player's own message lands this turn
         self.assertEqual([n["ok"] for n in notes], [None])
-        for part in ["cannot speak (mouth shut)", "what they meant, not what anyone heard", "a guess can be wrong", "never the wording"]:
+        for part in ["cannot speak (mouth shut)", "what they meant, not what was heard", "rightly or wrongly", "only the gist"]:
             self.assertIn(part, notes[0]["message"])
         said = 'I shout "Run, Mira! RUN, I said, run run run!"'
         heard = prompt.heard_as(card, state, said)

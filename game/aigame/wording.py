@@ -177,7 +177,7 @@ A game engine tracks {{tracked}}. It is the source of truth; the state shown to 
 The player's message may come with engine results for things they tried to do. Treat them as fact:
 - "done" happened. Narrate it.
 - "REJECTED" did not happen. Narrate the attempt failing for the stated reason, in the story's voice (reaching for a pouch that is empty, a door that will not open). Never narrate a rejected action as succeeding.
-- "UP TO YOU" is something the engine left to the story: setting off for a place that is not next door, that is not on {{user}}'s map, or while something holds them where they are. Decide what happens and narrate it. If {{user}} has a way that fits who they are and what they can do (magic that carries them, knowledge they have, someone taking them), let it work, and say plainly that they arrive. Then let the world answer as it would: people are startled, suspicious or angry at someone who turns up where they should not be, could not have known of, or was not allowed to leave for, and what they walked out on has its consequences. If they have no such way, they are delayed, turned back or unable to go.
+- "UP TO YOU" is something the engine left to the story, with what it knows of it. Decide what happens and narrate it. For a journey the map does not simply allow (a place that is not next door, that is not on {{user}}'s map, or while something holds them where they are): if {{user}} has a way that fits who they are and what they can do (magic that carries them, knowledge they have, someone taking them), let it work, and say plainly that they arrive. Then let the world answer as it would: people are startled, suspicious or angry at someone who turns up where they should not be, could not have known of, or was not allowed to leave for, and what they walked out on has its consequences. If they have no such way, they are delayed, turned back or unable to go.
 Never describe {{user}} gaining, losing or using something the engine tracks unless a result or the state says so.
 """)
 
@@ -286,7 +286,7 @@ Rules:
 - Use ids from the game state. If the player names an item that is not in the state at all, use the player's own words as the item value; the engine will reject it.
 - List a real attempt even when it looks impossible (the item is not in the inventory, there is not enough money). The engine decides. Never drop or correct an attempt.
 - Speech, looking around, picking things up from the scene and anything else outside the list above produce no actions; the narrator handles them.
-- The items are what the player carries. What is merely there in the scene is not one of them: a drink poured for them, food on the table, a tool lying about. Eating, drinking or handling such a thing produces no action, and an item is never put in its place because the name is close (a cup of wine at the table is not the item Bottle of Wine).
+- The items are what the player carries. Something merely present in the scene is not one of them: doing something with it produces no action, and no item is put in its place because the name is similar.
 - An action is listed only when the message says the player's character does it, now. Before listing one, check that the message is not merely talking about it. All of these are talk and produce no actions: a plan or intention ("I'll drink it once we're inside", "let's go to the stable later"), a suggestion or question ("shall we head out?", "should I use the potion?"), a condition ("if he attacks, I'll draw my sword"), an offer waiting for an answer ("want me to patch that up?"), a mention or a showing ("I show her the letter", "I still have that draught"), something in the past ("I bought this in the capital"), and anything said inside the character's speech that is not also done.
 - When it is unclear whether the player did it or only spoke of it, list nothing. The player can say so plainly next time; an action taken by mistake cannot be taken back.
 - Do not guess at things the player did not say.
@@ -388,9 +388,9 @@ You keep the journal of a text adventure. A scene has just ended; it is given to
 
 Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with {{user}} changed, and what was left unfinished. Use names: the scene is marked "Player:" for what {{user}} did and said, and you write of them as {{user}}, never as "the player". Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
 
-Give it a short title, and a gist: one plain sentence of at most 25 words that says what happened, with the names in it. The gist is what the narrator is always shown of this scene, so it must make sense by itself.
+Give it a short title, and a gist: one plain sentence of at most 25 words that says what happened, with the names in it. The gist is all the narrator is always shown of this scene, so it must make sense by itself.
 
-Give six to ten keywords: the words that, if they came up in talk later, should bring this scene back. Write them the way people would say them in passing: a first name ("Noelle", not only "Noelle Silva"), a place, an object, the subject. Add other words someone might use for the same thing (for a race: "race", "contest", "duel"). Leave out anyone or anything that is in nearly every scene; such a word brings back everything and so nothing.
+Give six to ten keywords: the words that would come up in talk if this scene were referred to later. Use the short everyday form of each name, and include other words someone might use for the same thing. Leave out whatever is in nearly every scene.
 
 Reply with JSON only:
 {"title": "...", "gist": "...", "content": "...", "keywords": ["...", "..."]}""")
@@ -419,13 +419,7 @@ Past tense for what happened, present for how things are. Use names. Leave out i
 
 _builtin('recall_memory', 'helper', "Remember", "Picks, from the list of scenes the story model no longer sees, the ones this turn calls for, so they are sent to it in full. It reads meaning, where the journal's own lookup can only match words.",
          {}, """\
-You are the memory of a text adventure. The narrator is about to answer the player and no longer sees the earlier scenes; it has only the one line on each that you see listed. Pick the scenes it needs told in full to answer well.
-
-Pick a scene when:
-- the player's message or the last reply refers to it, in whatever words: a race may be called a duel, a promise "what you said", a time "this noon" or "back at the exam";
-- it holds something that bears on what is being talked about or done right now: a bet now being settled, a secret now in danger, a question now being answered;
-- someone speaking or spoken to now was at the heart of it, and it would shape how they answer.
-Do not pick a scene only because someone in it is present; companions are in nearly every scene. When nothing earlier is touched on, pick none. At most five, the most needed first.
+You are the memory of a text adventure. The narrator is about to answer the player and no longer sees the earlier scenes, only the one line on each that is listed here. Pick the scenes it needs told in full to answer well: those that what is being said or done now refers to or depends on, however it is worded. Judge by meaning, not by shared words or by who is present. Pick none when nothing earlier bears on this turn. At most five, the most needed first.
 
 Reply with JSON only, giving the numbers of the scenes: {"scenes": [3, 8]}""")
 

@@ -117,8 +117,8 @@ _COMMON = frozenset("with from into over that this then them they their there af
 
 def _terms(entry):
     """What brings an entry to mind, each with how much a mention of it counts: its keywords
-    whole, and at half weight the longer single words of its keywords and its title, so that
-    "Noelle" finds the scene filed under "Noelle Silva" and "race" the one titled "Broom race"."""
+    whole, and at half weight the single words of its keywords and its title, so that part of a
+    name or of a title finds the scene filed under the whole of it."""
     terms = {}
     for keyword in entry.get("keywords", []):
         terms[keyword.lower()] = 1.0
@@ -156,8 +156,8 @@ def recall(card, state, text, limit=None, recent="", picked=()):
 
     picked is the ids of the entries the memory helper chose for this turn (see
     prompt.recall_prompt). Words can only find a scene that is spoken of in its own words; the
-    helper reads the list of scenes and knows that "our duel at noon" is the broom race. What it
-    picks comes first, and what the words find is added while there is room.
+    helper reads the list of scenes and goes by what is meant. What it picks comes first, and what
+    the words find is added while there is room.
 
     An entry is relevant when the text in play (what the player typed, what the story just said)
     uses one of its keywords; when the player has just come back to where it happened; or when
@@ -179,7 +179,7 @@ def recall(card, state, text, limit=None, recent="", picked=()):
         if entry.get("pinned"):
             pinned.append(entry)
         elif entry["end"] <= gone:
-            # A word also counts where it only begins one in the text: "duel" finds "dueled".
+            # A word also counts where it only begins one in the text, so its other forms find it too.
             hits = {}
             for term, weight in _terms(entry).items():
                 said = r"(?<!\w)%s%s" % (re.escape(term), r"(?!\w)" if " " in term else r"\w{0,3}(?!\w)")
@@ -241,9 +241,8 @@ def timeline(card, state):
     by, and who of the people named in it was there. It is sent every turn, and it only grows.
 
     This is the part of the memory that cannot miss. The running summary is rewritten each time
-    turns are folded into it and loses what it has no room for; a full entry comes back only when
-    one of its words comes up, and the player may call a race a duel. Without this list, someone
-    who stood and watched a scene could be written as never having heard of it."""
+    turns are folded into it, and a full entry comes back only when something brings it to mind.
+    With this list the story model always knows that a scene happened and who was there for it."""
     gone = state.get("summarized", 0)
     lines = ["- " + scene_line(card, entry) for entry in state.get("journal", []) if entry["end"] <= gone]
     if not lines:
