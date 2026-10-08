@@ -81,7 +81,7 @@
             }
           },
           {
-            "description": "Only valid when rules.allow_generated_items is true. Creates a misc item with no effects and gives it to who.",
+            "description": "Only valid when rules.allow_generated_items is true. Creates an item with no effects and gives it to who. With a slot, on a card that uses equipment, the item is equipment for that slot; otherwise it is a misc item.",
             "type": "object",
             "required": ["type", "name"],
             "additionalProperties": false,
@@ -90,6 +90,7 @@
               "who": { "$ref": "#/$defs/who" },
               "name": { "type": "string" },
               "description": { "type": "string" },
+              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] },
               "qty": { "$ref": "#/$defs/qty" }
             }
           },

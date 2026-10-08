@@ -301,8 +301,17 @@ def _create_item(card, state, a):
         raise Rejected("A new item needs a name.")
     name = name.strip()
     items = all_items(card, state)
+    # A slot makes the new item something to wear or hold. It never carries stat bonuses: those
+    # are the card's to give.
+    slot = a.get("slot") if a.get("slot") in SLOTS and card.has("equipment") else None
     try:
         iid, item = _find(items, name, "item")
+        if slot and item.get("generated") and item["type"] == "misc":
+            # An item the story made earlier is now said to be wearable: the one already held
+            # becomes equipment, and no second one is handed over.
+            item.update(type="equipment", slot=slot)
+            if who["inventory"].get(iid):
+                return "%s can now equip %s." % (who["name"], item["name"])
     except Rejected:
         if not card.allow_generated_items:
             raise Rejected("This game only has the items its card defines; %r is not one of them." % name)
@@ -311,6 +320,8 @@ def _create_item(card, state, a):
         while iid in items:
             iid, n = "%s_%d" % (base, n), n + 1
         item = {"id": iid, "name": name, "description": str(a.get("description", "")), "type": "misc", "generated": True}
+        if slot:
+            item.update(type="equipment", slot=slot)
         state["generated_items"][iid] = item
     _give(who, iid, qty)
     return "%s gets %s." % (who["name"], _count(item, qty))

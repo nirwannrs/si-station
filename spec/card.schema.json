@@ -129,7 +129,7 @@
         "allow_generated_items": {
           "type": "boolean",
           "default": true,
-          "description": "If true the narrator may introduce items not defined in the card (misc type, no effects). If false only card items can exist."
+          "description": "If true the narrator may introduce items not defined in the card (no effects; misc type, or equipment when the narrator names a slot and the card uses equipment). If false only card items can exist."
         }
       }
     },

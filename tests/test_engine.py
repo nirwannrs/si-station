@@ -213,6 +213,23 @@ class EngineTest(unittest.TestCase):
         self.rejected(type="create_item", name="Magic Sword")
         self.ok(type="create_item", name="Bowl of Stew")  # existing card items are still fine
 
+    def test_created_item_can_be_equipment(self):
+        self.ok(type="create_item", name="Silk Dress", slot="body")
+        dress = self.state["generated_items"]["gen_silk_dress"]
+        self.assertEqual((dress["type"], dress["slot"]), ("equipment", "body"))
+        self.assertNotIn("effects", dress)
+        self.ok(type="equip", item="gen_silk_dress")
+        self.assertEqual(self.me["equipment"]["body"], "gen_silk_dress")
+        self.ok(type="create_item", name="Odd Hat", slot="nose")  # not a slot: a plain item
+        self.assertEqual(self.state["generated_items"]["gen_odd_hat"]["type"], "misc")
+        self.rejected(type="equip", item="gen_odd_hat")
+        self.ok(type="create_item", name="Odd Hat", slot="head")  # said again with a slot: the one held becomes wearable
+        self.assertEqual(self.me["inventory"]["gen_odd_hat"], 1)
+        self.ok(type="equip", item="gen_odd_hat")
+        self.card.data["rules"].setdefault("features", {})["equipment"] = False
+        self.ok(type="create_item", name="Tin Ring", slot="accessory")
+        self.assertEqual(self.state["generated_items"]["gen_tin_ring"]["type"], "misc")
+
     # shops and money
 
     def test_buy_checks_money_stock_and_location(self):

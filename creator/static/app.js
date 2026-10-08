@@ -529,7 +529,7 @@ const SECTIONS = [
     { t: "group", k: "rules", label: "Details", fields: [
       { t: "text", k: "currency_name", label: "What money is called", placeholder: "Gold", when: () => has("money") },
       { t: "bool", k: "allow_generated_locations", label: "The story may create new places", help: "Somewhere the card does not define, such as a pocket dimension or wherever a villain throws everyone. Off means the map is fixed to your locations.", default: true, redraw: false, when: () => (card.locations || []).length },
-      { t: "bool", k: "allow_generated_items", label: "The AI may invent new items", help: "They are plain items with no effects. Off means only the items you define exist.", default: true, redraw: false, when: () => has("inventory") },
+      { t: "bool", k: "allow_generated_items", label: "The AI may invent new items", help: "They have no effects. With equipment on, the AI can make one wearable. Off means only the items you define exist.", default: true, redraw: false, when: () => has("inventory") },
       { t: "text", k: "relationship_name", label: "What the relationship value is called", placeholder: "Affection", redraw: true, when: () => has("relationships") },
       { t: "group", k: "leveling", label: "Levelling", when: () => has("levels"), fields: [
         { t: "number", k: "xp_per_level", label: "Experience for the first level", placeholder: "100", help: "Each level after takes this much more: level 2 needs twice as much, level 3 three times." },

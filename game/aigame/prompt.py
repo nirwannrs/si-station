@@ -43,6 +43,8 @@ def uses(card, need):
         return bool(card.locations) and card.data["rules"].get("allow_generated_locations", True)
     if need == "new_items":
         return card.has("inventory") and card.allow_generated_items
+    if need == "new_gear":
+        return card.has("equipment") and card.allow_generated_items
     return card.has(need)
 
 
@@ -64,6 +66,7 @@ PLAYER_ACTIONS = (
 NARRATOR_ACTIONS = (
     ("inventory", '{"type": "add_item", "who": WHO, "item": ID, "qty": N}  an existing item is found, looted or received from the world'),
     ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "..."}  a new item that is not in the item list'),
+    ("new_gear", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "slot": SLOT}  a new item that can be worn or held: clothing, armour, jewellery, a weapon. SLOT is where it goes (head, body, hands, feet, weapon, offhand, accessory)'),
     ("inventory", '{"type": "remove_item", "who": WHO, "item": ID, "qty": N}  an item is lost, broken or taken away by the world'),
     ("inventory", '{"type": "transfer_item", "item": ID, "qty": N, "from": WHO, "to": WHO}  one character hands an item to another'),
     ("inventory", '{"type": "use_item", "who": WHO, "item": ID, "target": WHO}  a character uses up an item'),
