@@ -66,7 +66,9 @@ PLAYER_ACTIONS = (
 NARRATOR_ACTIONS = (
     ("inventory", '{"type": "add_item", "who": WHO, "item": ID, "qty": N}  an existing item is found, looted or received from the world'),
     ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "..."}  a new item that is not in the item list'),
-    ("new_gear", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "slot": SLOT}  a new item that can be worn or held: clothing, armour, jewellery, a weapon. SLOT is where it goes (head, body, hands, feet, weapon, offhand, accessory)'),
+    ("new_gear", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "slot": SLOT, "effects": [{"stat": STAT_ID, "amount": N}]}  a new item that can be worn or held: clothing, armour, jewellery, a weapon. SLOT is where it goes (head, body, hands, feet, weapon, offhand, accessory). effects is what it adds to a stat for as long as it is worn; leave it out for ordinary things, which is most of them'),
+    ("new_items", '{"type": "create_item", "who": WHO, "name": "...", "description": "...", "kind": "consumable", "effects": [{"stat": STAT_ID, "amount": N}]}  a new item that is gone once used: food, a drink, a potion, a salve. effects is what using it does to a stat; leave it out when it does nothing a stat measures'),
+    ("new_items", '{"type": "change_item", "item": ID, "kind": "misc" or "consumable" or "equipment", "slot": SLOT, "effects": [...], "name": "...", "description": "..."}  an item the story itself made earlier (its id starts with gen_) has become something else, or turns out to be more than it seemed: cloth sewn into a cloak, a vial found to heal, a charm that has lost its power. Give only the parts that change. kind "misc" makes it a plain thing again'),
     ("inventory", '{"type": "remove_item", "who": WHO, "item": ID, "qty": N}  an item is lost, broken or taken away by the world'),
     ("inventory", '{"type": "transfer_item", "item": ID, "qty": N, "from": WHO, "to": WHO}  one character hands an item to another'),
     ("inventory", '{"type": "use_item", "who": WHO, "item": ID, "target": WHO}  a character uses up an item'),

@@ -14,7 +14,7 @@ from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, sta
 # The card system each action belongs to. An action for a system the card switched off is rejected.
 REQUIRES = {
     "use_item": "inventory", "transfer_item": "inventory", "add_item": "inventory", "remove_item": "inventory",
-    "create_item": "inventory", "equip": "equipment", "unequip": "equipment",
+    "create_item": "inventory", "change_item": "inventory", "equip": "equipment", "unequip": "equipment",
     "buy": "money", "sell": "money", "change_money": "money",
     "gain_xp": "levels", "use_skill": "skills", "unlock_skill": "skills",
     "change_relationship": "relationships",
@@ -293,6 +293,72 @@ def _remove_item(card, state, a):
     return "%s loses %s." % (who["name"], _count(item, qty))
 
 
+def _shape(card, a):
+    """What an action says an invented item is: the fields it names, checked, and nothing more.
+
+    A field that makes no sense is left out rather than refused, so a slip in one of them does not
+    cost the story its item."""
+    shape = {}
+    kind = a.get("kind")
+    if a.get("slot") in SLOTS and card.has("equipment") and kind in (None, "equipment"):
+        shape.update(type="equipment", slot=a["slot"])
+    elif kind in ("consumable", "misc"):
+        shape["type"] = kind
+    if isinstance(a.get("effects"), list):
+        effects = []
+        for effect in a["effects"]:
+            try:
+                sid = _find(card.stats, effect.get("stat"), "stat")[0] if isinstance(effect, dict) else None
+            except Rejected:
+                continue
+            amount = effect.get("amount") if sid else None
+            if isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount and sid not in [e["stat"] for e in effects]:
+                effects.append({"stat": sid, "amount": amount})
+        shape["effects"] = effects
+    return shape
+
+
+def _bonus_limit(card, stat_id):
+    """The most invented gear may add to a stat or take from it: half the stat's range, or where it
+    has no ceiling, its starting value or the most any of the card's own gear gives it. Something
+    used up is not held to this; what it does is over at once and stays within the stat's own limits."""
+    stat = card.stats[stat_id]
+    if stat.get("max") is not None:
+        return max((stat["max"] - stat.get("min", 0)) / 2.0, 1)
+    given = [abs(e["amount"]) for i in card.items.values() if i["type"] == "equipment" for e in i.get("effects", []) if e["stat"] == stat_id]
+    return max([abs(stat["default"]), 1] + given)
+
+
+def _reshape(card, state, item, shape):
+    """Makes an invented item what the story now says it is. Returns whether anything changed."""
+    before = dict(item)
+    if shape.get("type") == "misc":
+        item.pop("effects", None)
+    item.update(shape)
+    if item.get("effects") and item["type"] == "misc":
+        item["type"] = "consumable"                 # it does something and is worn nowhere: it is used
+    if item["type"] != "equipment":
+        item.pop("slot", None)
+    if item["type"] == "equipment" and item.get("effects"):
+        item["effects"] = [{"stat": e["stat"], "amount": max(-_bonus_limit(card, e["stat"]), min(_bonus_limit(card, e["stat"]), e["amount"]))}
+                           for e in item["effects"]]
+    if not item.get("effects"):
+        item.pop("effects", None)
+    # One being worn somewhere it no longer belongs goes back among its owner's things.
+    for actor in state["actors"].values():
+        for slot, worn in list(actor["equipment"].items()):
+            if worn == item["id"] and item.get("slot") != slot:
+                del actor["equipment"][slot]
+                _give(actor, worn, 1)
+    return item != before
+
+
+def _what(card, item):
+    does = ", ".join("%s %s" % (card.stats[e["stat"]]["name"], _signed(e["amount"])) for e in item.get("effects", []))
+    kind = {"equipment": "worn or held (%s)" % item.get("slot"), "consumable": "used up when used"}.get(item["type"], "a plain item")
+    return kind + ("; %s" % does if does else "")
+
+
 def _create_item(card, state, a):
     wid, who = _who(state, a)
     qty = _qty(a)
@@ -301,18 +367,12 @@ def _create_item(card, state, a):
         raise Rejected("A new item needs a name.")
     name = name.strip()
     items = all_items(card, state)
-    # A slot makes the new item something to wear or hold. It never carries stat bonuses: those
-    # are the card's to give.
-    slot = a.get("slot") if a.get("slot") in SLOTS and card.has("equipment") else None
+    shape = _shape(card, a)
     try:
         iid, item = _find(items, name, "item")
-        if slot and item.get("generated") and item["type"] == "misc":
-            # An item the story made earlier is now said to be wearable: the one already held
-            # becomes equipment, and no second one is handed over.
-            item.update(type="equipment", slot=slot)
-            if who["inventory"].get(iid):
-                return "%s can now equip %s." % (who["name"], item["name"])
     except Rejected:
+        iid = None
+    if iid is None:
         if not card.allow_generated_items:
             raise Rejected("This game only has the items its card defines; %r is not one of them." % name)
         base = "gen_" + ("".join(c if c.isalnum() else "_" for c in name.lower()).strip("_") or "item")
@@ -320,11 +380,42 @@ def _create_item(card, state, a):
         while iid in items:
             iid, n = "%s_%d" % (base, n), n + 1
         item = {"id": iid, "name": name, "description": str(a.get("description", "")), "type": "misc", "generated": True}
-        if slot:
-            item.update(type="equipment", slot=slot)
+        _reshape(card, state, item, shape)
         state["generated_items"][iid] = item
+    elif shape and item.get("generated"):
+        # An item the story made earlier, said again as something else: the one already held
+        # becomes that, and no second one is handed over.
+        held = who["inventory"].get(iid) or iid in who["equipment"].values()
+        if _reshape(card, state, item, shape) and held:
+            return "%s is now %s." % (item["name"], _what(card, item))
     _give(who, iid, qty)
     return "%s gets %s." % (who["name"], _count(item, qty))
+
+
+def _change_item(card, state, a):
+    """An item the story made becomes something else: a rag sewn into a hood, a vial that turns
+    out to heal, a blade that has lost its edge. The card's own items stay as the card made them."""
+    iid, item = _item(card, state, a)
+    if not item.get("generated"):
+        raise Rejected("%s is one of this game's own items and stays as it is." % item["name"])
+    if a.get("kind") == "equipment" or a.get("slot") is not None:
+        if not card.has("equipment"):
+            raise Rejected("This game does not use equipment.")
+        if a.get("slot") not in SLOTS:
+            raise Rejected("Something worn or held needs a slot (one of %s)." % ", ".join(SLOTS))
+    words = {}
+    name = a.get("name")
+    if isinstance(name, str) and name.strip() and name.strip() != item["name"]:
+        if len(name) > 60 or any(_plain(other["name"]) == _plain(name) for oid, other in all_items(card, state).items() if oid != iid):
+            raise Rejected("%r cannot be its name: too long, or another item is called that." % name.strip())
+        words["name"] = name.strip()
+    if isinstance(a.get("description"), str) and a["description"] != item.get("description", ""):
+        words["description"] = a["description"]
+    was = item["name"]
+    if not (_reshape(card, state, item, _shape(card, a)) | bool(words)):
+        raise Rejected("%s is already that." % was)
+    item.update(words)
+    return "%s is now %s%s." % (was, "called %s, " % item["name"] if "name" in words else "", _what(card, item))
 
 
 def _shop(card, state, a):
@@ -771,6 +862,7 @@ _HANDLERS = {
     "add_item": _add_item,
     "remove_item": _remove_item,
     "create_item": _create_item,
+    "change_item": _change_item,
     "buy": _buy,
     "sell": _sell,
     "change_money": _change_money,

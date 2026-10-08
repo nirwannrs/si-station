@@ -209,6 +209,14 @@ def reconcile(card, state):
     for key, value in fresh.items():
         state.setdefault(key, value)
 
+    for item in state["generated_items"].values():
+        # What a story-made item does to a stat the card no longer has is forgotten; the item stays.
+        if "effects" in item:
+            item["effects"] = [e for e in item["effects"] if e["stat"] in card.stats]
+        if item["type"] == "equipment" and not card.has("equipment"):
+            item["type"] = "misc"
+            item.pop("slot", None)
+
     for who in [w for w in state["actors"] if w not in fresh["actors"]]:
         notes.append("%s is no longer in this card." % state["actors"].pop(who)["name"])
     for who, starting in fresh["actors"].items():

@@ -81,7 +81,7 @@
             }
           },
           {
-            "description": "Only valid when rules.allow_generated_items is true. Creates an item with no effects and gives it to who. With a slot, on a card that uses equipment, the item is equipment for that slot; otherwise it is a misc item.",
+            "description": "Only valid when rules.allow_generated_items is true. Creates an item and gives it to who. With a slot, on a card that uses equipment, it is equipment for that slot; with kind consumable it is used up when used; otherwise it is a misc item. effects are applied once on use (consumable) or while equipped (equipment, each held to half the stat's range, or to the stat's default where it has no max); an item given effects and no slot is a consumable. A field that makes no sense is ignored. Naming an item the story made earlier with a different kind, slot or effects changes the one already held instead of giving another.",
             "type": "object",
             "required": ["type", "name"],
             "additionalProperties": false,
@@ -90,8 +90,41 @@
               "who": { "$ref": "#/$defs/who" },
               "name": { "type": "string" },
               "description": { "type": "string" },
+              "kind": { "enum": ["misc", "consumable", "equipment"] },
               "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["stat", "amount"],
+                  "additionalProperties": false,
+                  "properties": { "stat": { "$ref": "#/$defs/id" }, "amount": { "type": "number" } }
+                }
+              },
               "qty": { "$ref": "#/$defs/qty" }
+            }
+          },
+          {
+            "description": "Narrator only. Changes an item the story created (never one the card defines): what kind it is, where it is worn, what it does, its name or its description. Only the fields given change. One being worn that no longer fits its slot goes back into its owner's inventory.",
+            "type": "object",
+            "required": ["type", "item"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_item" },
+              "item": { "$ref": "#/$defs/id" },
+              "kind": { "enum": ["misc", "consumable", "equipment"] },
+              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["stat", "amount"],
+                  "additionalProperties": false,
+                  "properties": { "stat": { "$ref": "#/$defs/id" }, "amount": { "type": "number" } }
+                }
+              },
+              "name": { "type": "string" },
+              "description": { "type": "string" }
             }
           },
           {

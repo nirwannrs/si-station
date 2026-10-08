@@ -140,7 +140,10 @@ class EngineTest(unittest.TestCase):
         self.state["quests"]["missing_courier"]["stage"] = 9
         self.state["shops"] = {"old_shop": {"stew": 1}, "lantern_bar": {"healing_draught": 0, "old_sword": 2}}
         del self.state["expressions"]
+        self.state["generated_items"]["gen_charm"] = {"id": "gen_charm", "name": "Charm", "type": "consumable", "generated": True,
+                                                      "effects": [{"stat": "luck", "amount": 1}, {"stat": "hp", "amount": 1}]}
         notes = reconcile(self.card, self.state)
+        self.assertEqual(self.state["generated_items"]["gen_charm"]["effects"], [{"stat": "hp", "amount": 1}])
         self.assertEqual(len(notes), 4, notes)
         self.assertEqual(self.me["inventory"], {"healing_draught": 1, "belt_knife": 1})
         self.assertNotIn("weapon", self.me["equipment"])
@@ -229,6 +232,42 @@ class EngineTest(unittest.TestCase):
         self.card.data["rules"].setdefault("features", {})["equipment"] = False
         self.ok(type="create_item", name="Tin Ring", slot="accessory")
         self.assertEqual(self.state["generated_items"]["gen_tin_ring"]["type"], "misc")
+
+    def test_created_item_can_do_something(self):
+        hp = self.card.stats["hp"]
+        self.ok(type="change_stat", stat="hp", amount=-5)
+        hurt = self.me["stats"]["hp"]
+        self.ok(type="create_item", name="Red Vial", effects=[{"stat": "hp", "amount": 3}, {"stat": "luck_of_the_draw", "amount": 9}, {"stat": "hp", "amount": 0}])
+        vial = self.state["generated_items"]["gen_red_vial"]
+        self.assertEqual((vial["type"], vial["effects"]), ("consumable", [{"stat": "hp", "amount": 3}]))  # unknown stats and empty amounts are dropped
+        self.ok(type="use_item", item="gen_red_vial")
+        self.assertEqual(self.me["stats"]["hp"], hurt + 3)
+        self.assertNotIn("gen_red_vial", self.me["inventory"])
+        self.ok(type="create_item", name="Giant's Belt", slot="accessory", effects=[{"stat": "hp", "amount": 100000}])
+        limit = (hp["max"] - hp.get("min", 0)) / 2.0 if hp.get("max") is not None else abs(hp["default"])
+        self.assertEqual(self.state["generated_items"]["gen_giant_s_belt"]["effects"], [{"stat": "hp", "amount": limit}])
+
+    def test_the_story_can_change_what_it_made_and_nothing_else(self):
+        self.ok(type="create_item", name="Grey Rag")
+        rag = self.state["generated_items"]["gen_grey_rag"]
+        self.ok(type="change_item", item="gen_grey_rag", slot="head", name="Grey Hood")
+        self.assertEqual((rag["type"], rag["slot"], rag["name"]), ("equipment", "head", "Grey Hood"))
+        self.ok(type="equip", item="Grey Hood")
+        self.ok(type="change_item", item="gen_grey_rag", slot="accessory")       # worn on the head, now a scarf: back in the pack
+        self.assertEqual((self.me["equipment"].get("head"), self.me["inventory"]["gen_grey_rag"]), (None, 1))
+        self.ok(type="equip", item="gen_grey_rag")
+        self.ok(type="change_item", item="gen_grey_rag", kind="consumable", effects=[{"stat": "hp", "amount": 1}])
+        self.assertEqual((rag["type"], "slot" in rag, self.me["equipment"].get("accessory"), self.me["inventory"]["gen_grey_rag"]), ("consumable", False, None, 1))
+        self.ok(type="change_item", item="gen_grey_rag", kind="misc")
+        self.assertEqual((rag["type"], "effects" in rag), ("misc", False))
+        self.rejected(type="change_item", item="gen_grey_rag", kind="misc")       # nothing to change
+        self.rejected(type="change_item", item="gen_grey_rag", kind="equipment")  # no slot
+        self.rejected(type="change_item", item="gen_grey_rag", name="Travel Cloak")
+        self.rejected(type="change_item", item="travel_cloak", kind="misc")       # the card's own
+        self.ok(type="create_item", name="Grey Hood", kind="consumable")          # said again as something else: changed, not doubled
+        self.assertEqual((rag["type"], self.me["inventory"]["gen_grey_rag"]), ("consumable", 1))
+        self.ok(type="create_item", name="Grey Hood", kind="consumable")          # said again as it is: one more
+        self.assertEqual(self.me["inventory"]["gen_grey_rag"], 2)
 
     # shops and money
 
