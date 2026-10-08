@@ -35,17 +35,19 @@
             }
           },
           {
+            "description": "Takes off what who has equipped, named by its slot or by the item itself; it goes back into their inventory. One of slot and item is needed.",
             "type": "object",
-            "required": ["type", "slot"],
+            "required": ["type"],
             "additionalProperties": false,
             "properties": {
               "type": { "const": "unequip" },
               "who": { "$ref": "#/$defs/who" },
-              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] }
+              "slot": { "enum": ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"] },
+              "item": { "$ref": "#/$defs/id" }
             }
           },
           {
-            "description": "Move items between two holders. Fails if from does not hold enough.",
+            "description": "Move items between two holders. Fails if from does not hold enough; one they have equipped counts and comes off.",
             "type": "object",
             "required": ["type", "item", "from", "to"],
             "additionalProperties": false,

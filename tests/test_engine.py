@@ -233,6 +233,22 @@ class EngineTest(unittest.TestCase):
         self.ok(type="create_item", name="Tin Ring", slot="accessory")
         self.assertEqual(self.state["generated_items"]["gen_tin_ring"]["type"], "misc")
 
+    def test_what_is_worn_can_fall_off_be_lost_or_handed_over(self):
+        self.ok(type="unequip", item="Travel Cloak")                              # named by the item, not the slot
+        self.assertEqual((self.me["equipment"].get("body"), self.me["inventory"]["travel_cloak"]), (None, 1))
+        self.rejected(type="unequip", item="travel_cloak")
+        self.ok(type="equip", item="travel_cloak")
+        self.ok(type="remove_item", item="travel_cloak")                          # lost while worn
+        self.assertEqual((self.me["equipment"].get("body"), self.me["inventory"].get("travel_cloak")), (None, None))
+        self.ok(type="add_item", item="travel_cloak")
+        self.ok(type="equip", item="travel_cloak")
+        self.rejected(type="remove_item", item="travel_cloak", qty=3)             # still more than they have, and nothing comes off
+        self.assertEqual(self.me["equipment"]["body"], "travel_cloak")
+        self.ok(type="transfer_item", item="travel_cloak", to="mira", **{"from": "player"})
+        self.assertEqual((self.me["equipment"].get("body"), self.state["actors"]["mira"]["inventory"]["travel_cloak"]), (None, 1))
+        self.ok(type="equip", who="mira", item="travel_cloak")                    # the story dresses someone
+        self.assertEqual(self.state["actors"]["mira"]["equipment"]["body"], "travel_cloak")
+
     def test_a_plain_item_the_story_made_can_be_put_on(self):
         self.ok(type="create_item", name="Wrap Dress")
         before = copy.deepcopy(self.state)

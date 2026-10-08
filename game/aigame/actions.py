@@ -207,6 +207,17 @@ def _need(actor, item_id, item, qty):
         raise Rejected("%s only has %d %s." % (actor["name"], held, item["name"]))
 
 
+def _shed(actor, item_id, qty):
+    """What someone is wearing is theirs to lose or hand over too. When what they carry falls short
+    by the one they have on, it comes off first, so a slipper that falls from a foot is found."""
+    if actor["inventory"].get(item_id, 0) == qty - 1:
+        for slot, worn in list(actor["equipment"].items()):
+            if worn == item_id:
+                del actor["equipment"][slot]
+                _give(actor, item_id, 1)
+                return
+
+
 def _give(actor, item_id, qty):
     actor["inventory"][item_id] = actor["inventory"].get(item_id, 0) + qty
 
@@ -265,6 +276,12 @@ def _equip(card, state, a):
 def _unequip(card, state, a):
     wid, who = _who(state, a)
     slot = a.get("slot")
+    if slot not in SLOTS and a.get("item") is not None:
+        # Named by what comes off rather than where it was worn.
+        iid, item = _item(card, state, a)
+        slot = dict((worn, s) for s, worn in who["equipment"].items()).get(iid)
+        if slot is None:
+            raise Rejected("%s does not have %s equipped." % (who["name"], item["name"]))
     if slot not in SLOTS:
         raise Rejected("There is no equipment slot called %r." % (slot,))
     iid = who["equipment"].get(slot)
@@ -284,6 +301,7 @@ def _transfer_item(card, state, a):
         raise Rejected("%s cannot give an item to themselves." % giver["name"])
     if not together(card, giver, taker):
         raise Rejected("%s and %s are not in the same place." % (giver["name"], taker["name"]))
+    _shed(giver, iid, qty)
     _need(giver, iid, item, qty)
     _take(giver, iid, qty)
     _give(taker, iid, qty)
@@ -302,6 +320,7 @@ def _remove_item(card, state, a):
     wid, who = _who(state, a)
     iid, item = _item(card, state, a)
     qty = _qty(a)
+    _shed(who, iid, qty)
     _need(who, iid, item, qty)
     _take(who, iid, qty)
     return "%s loses %s." % (who["name"], _count(item, qty))
