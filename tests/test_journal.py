@@ -55,7 +55,10 @@ class JournalTest(unittest.TestCase):
 
     def test_what_the_helper_wrote_is_cleaned_up(self):
         entry = journal.parse_entry('```json\n{"title": " The  letter ", "content": "Tobin gave\\nup the letter.", "keywords": ["letter", "ok", 5, " Tobin "]}\n```')
-        self.assertEqual(entry, {"title": "The letter", "content": "Tobin gave up the letter.", "keywords": ["letter", "Tobin"]})
+        self.assertEqual(entry, {"title": "The letter", "gist": "", "content": "Tobin gave up the letter.", "keywords": ["letter", "Tobin"]})
+        self.assertEqual(journal.parse_entry('{"title": "t", "gist": " Tobin  gave it up. ", "content": "c"}')["gist"], "Tobin gave it up.")
+        self.assertEqual(journal.gist({"gist": "Tobin gave it up.", "content": "Long."}), "Tobin gave it up.")
+        self.assertEqual(journal.gist({"content": "Day 1, 11:39. Noelle challenged Ash to a broom race. Both crashed."}), "Noelle challenged Ash to a broom race.")   # an older entry: its first real sentence
         self.assertEqual(journal.parse_entry('{"content": "Something happened."}')["title"], "A scene")
         for bad in ("no json", '{"title": "x"}', '{"content": "  "}'):
             self.assertIsNone(journal.parse_entry(bad))
@@ -105,8 +108,11 @@ class JournalTest(unittest.TestCase):
         self.assertIn("Broom race, silence bet", self.titles("Mira, did you see how I raced her at noon?"))            # "raced" finds the race, over four other scenes with Mira in them
         self.assertEqual(self.titles("That duel at noon, Mira.")[-1:], ["A quiet hour"])                                # only her name to go by: the latest ones, as before
         self.assertIn("Lunch and a yard duel", self.titles("That duel at noon, Mira."))
+        self.assertEqual(self.titles("And then what?"), [])
+        self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "And then what?", recent="We spoke of the broom race.")], ["Broom race, silence bet"])   # still the subject a turn later
+        self.assertEqual(self.titles("The broom race, Mira!"), ["Broom race, silence bet"])                             # a word that points at one scene: the others, sharing only her name, stay out
         listed = journal.timeline(self.card, self.state)
-        self.assertIn("\n- Day 1, 11:08: Broom race, silence bet (there: Mira Oakhand)\n", listed)                                             # and every scene is always named, with when it was
+        self.assertIn("\n- Day 1, 11:08: Broom race, silence bet. %s and Mira talked; %s's bet stands. (there: Mira Oakhand)\n" % (me, me), listed)                                             # and every scene is always named, with when it was
         self.assertEqual(listed.count("\n- "), 5)
         self.state["journal"] += [dict(self.state["journal"][0], id=50 + n, title="Scene %d" % n) for n in range(60)]
         self.assertEqual(journal.timeline(self.card, self.state).count("\n- "), journal.LISTED)                    # never an endless list
@@ -116,12 +122,12 @@ class JournalTest(unittest.TestCase):
         self.state["summarized"], self.state["summary"] = 8, "The player came to the inn."
         system, messages = prompt.narrator_prompt(self.card, self.state, self.preset, "Who had the courier's letter?", [], record=False)
         last = messages[-1]["content"]
-        self.assertIn("[Story so far]\nThe player came to the inn.\n\n[What has happened so far, scene by scene]\n- Tobin's lie (there: Tobin)\n- The cellar door (there: Mira Oakhand)\nAll of these happened", last)
+        self.assertIn("[Story so far]\nThe player came to the inn.\n\n[What has happened so far, scene by scene]\n- Tobin's lie. Tobin swore he never saw the courier. (there: Tobin)\n- The cellar door. The cellar was locked; Mira keeps the key. (there: Mira Oakhand)\nAll of these happened", last)
         self.assertNotIn("A debt (", last)                                                   # that scene is still in the prompt: it needs no line
         self.assertIn("\n\n[Remembered from earlier in the story]\n- Tobin's lie: Tobin swore he never saw the courier.", last)
         self.assertNotIn("scene by scene", system)
         self.assertNotIn("Remembered from earlier", system)
-        self.assertNotIn("The cellar was locked", last)                                               # only what this turn calls for
+        self.assertEqual(last.count("The cellar was locked"), 1)                           # in the list of scenes, and not sent in full                                               # only what this turn calls for
         quiet = prompt.narrator_prompt(self.card, self.state, self.preset, "I wait.", [], record=False)[1][-1]["content"]
         self.assertNotIn("Remembered from earlier", quiet)
 

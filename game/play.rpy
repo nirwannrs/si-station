@@ -374,6 +374,8 @@ screen hud(start="inventory"):
                                         textbutton _("Edit") action Function(journal_open_editor, entry["id"]) text_size 24 yalign 0.5
                                         textbutton _("Remove") action Confirm(_("Remove this entry? The story model will no longer be reminded of that scene."), Function(journal_remove, entry["id"])) text_size 24 yalign 0.5
                                     text esc(entry["content"]) size 24
+                                    if entry.get("keywords"):
+                                        text esc("Brought back by: %s" % ", ".join(entry["keywords"])) size 20 color "#9fb8d8"
                                     text esc("Turns %d to %d. %s" % (entry["start"] + 1, entry["end"],
                                         "Sent every turn." if entry.get("pinned") else "Sent when it matters." if entry["end"] <= folded else "Not sent yet: the story model still sees this scene itself.")) size 20 color "#888888"
                             if not entries:

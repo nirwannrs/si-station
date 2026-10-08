@@ -209,6 +209,10 @@ class PromptTest(unittest.TestCase):
         self.assertIn("Rain follows you", messages[0]["content"])
         turns = [{"player": "I wave.", "results": [], "narration": "Mira nods at {{user}}."}]
         self.assertIn("Mira nods at Ash.", prompt.summary_prompt(self.card, self.state, turns)[1][0]["content"])
+        self.assertIn("At most 250 words.", prompt.summary_prompt(self.card, self.state, turns)[0])
+        self.assertIn("Nothing that is in the existing summary is lost", prompt.summary_prompt(self.card, self.state, turns)[0])
+        self.assertIn("At most 840 words.", prompt.summary_prompt(self.card, dict(self.state, summarized=140 - len(turns)), turns)[0])     # it grows with what it covers
+        self.assertIn("At most 1200 words.", prompt.summary_prompt(self.card, dict(self.state, summarized=5000), turns)[0])                # up to a point
 
 
 class DirectorTest(unittest.TestCase):

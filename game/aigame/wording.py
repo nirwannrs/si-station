@@ -388,10 +388,12 @@ You keep the journal of a text adventure. A scene has just ended; it is given to
 
 Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with {{user}} changed, and what was left unfinished. Use names: the scene is marked "Player:" for what {{user}} did and said, and you write of them as {{user}}, never as "the player". Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
 
-Give it a short title, and three to six keywords: the names, places, objects and subjects that, if they came up again, should bring this scene to mind. Use the words the story used.
+Give it a short title, and a gist: one plain sentence of at most 25 words that says what happened, with the names in it. The gist is what the narrator is always shown of this scene, so it must make sense by itself.
+
+Give six to ten keywords: the words that, if they came up in talk later, should bring this scene back. Write them the way people would say them in passing: a first name ("Noelle", not only "Noelle Silva"), a place, an object, the subject. Add other words someone might use for the same thing (for a race: "race", "contest", "duel"). Leave out anyone or anything that is in nearly every scene; such a word brings back everything and so nothing.
 
 Reply with JSON only:
-{"title": "...", "content": "...", "keywords": ["...", "..."]}""")
+{"title": "...", "gist": "...", "content": "...", "keywords": ["...", "..."]}""")
 
 _builtin('suggest_choices', 'helper', "Suggest replies", "Writes the suggested replies shown above the input box.",
          {'count': 'how many suggestions to give'}, """\
@@ -401,8 +403,10 @@ Reply with JSON only: {"choices": ["...", "..."]}""")
 
 
 _builtin('summarize', 'helper', "Summarize old turns", "Folds older turns into the running summary.",
-         {}, """\
-You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Where the scenes give a time and place, keep when the things that matter happened (the day or date), in the story's own terms. Each new scene says who was present: for anything it could matter later who knows of, say who was there for it or who was told. Leave out inventory, money and stats; the game tracks those. At most 250 words. Reply with the summary only.""")
+         {'length': 'how long the summary may be, which grows with how much of the story it covers'}, """\
+You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Where the scenes give a time and place, keep when the things that matter happened (the day or date), in the story's own terms. Each new scene says who was present: for anything it could matter later who knows of, say who was there for it or who was told. Leave out inventory, money and stats; the game tracks those.
+Nothing that is in the existing summary is lost in the new one. Say it in fewer words if you must, but every event, promise, secret and who knows of it stays; only something that has been settled for good and can no longer matter may shrink to a clause. Keep events in the order they happened.
+{{length}} Reply with the summary only.""")
 
 
 # How each one is sent. A helper job is one call: its wording as the instruction, then a single
@@ -460,9 +464,10 @@ _sends("suggest_choices", _HELPER,
        ("[Active quests]", "open quests, as the player sees them; only when there are any", "The card's quests, and the save for how far each has got.", "card:quests"),
        ("[Last narration]", "the reply the player is answering", "The story model's reply this turn.", None),
        count=("How many suggestions to ask for. Set in this preset, under About and starting values.", "preset:settings"))
-_sends("summarize", _HELPER,
+_sends("summarize", _HELPER + " The reply may be longer than other helpers' replies.",
        ("[Existing summary]", "the summary so far", "The save: what this same job wrote the last time it ran. \"(none yet)\" the first time.", None),
-       ("[New scenes]", "the turns being folded into it", "The save: the oldest turns that are not in the summary yet, word for word, each as what the player typed and what the story model replied. The game takes the older half of the turns the story model still sees, once there are more than the player's \"summarize after\" number or the prompt no longer fits the context size.", "preset:settings"))
+       ("[New scenes]", "the turns being folded into it", "The save: the oldest turns that are not in the summary yet, word for word, each as what the player typed and what the story model replied. The game takes the older half of the turns the story model still sees, once there are more than the player's \"summarize after\" number or the prompt no longer fits the context size.", "preset:settings"),
+       length=("A sentence the game writes: at most so many words. The number is 6 for each turn the summary covers, never under 250 or over 1200.", None))
 _sends("move_world", _HELPER,
        ("[Places]", "every place the game has, with its id", "The card's locations, and any the story has added.", "card:locations"),
        ("[The player]", "where the player is now", "The save.", None),

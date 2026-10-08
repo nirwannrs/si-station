@@ -40,6 +40,8 @@ init python:
     from aigame import prompt as aig_prompt
 
     HELPER_SAMPLING = {"temperature": 0.2, "max_tokens": 1000}
+    ## The running summary grows with the story (see prompt.summary_prompt), so its reply needs more room than other helpers'.
+    SUMMARY_TOKENS = 3000
     SUGGEST_SAMPLING = {"temperature": 0.8, "max_tokens": 1000}
     CHAT_TIMEOUT = 180
     ## Most recent turns listed in the History menu, and on the play screen of a text-only card.
@@ -1007,6 +1009,8 @@ init python:
     def journal_open_editor(entry_id):
         entry = journal_entry(entry_id)
         runtime.journal_edit = {"id": entry_id, "before": dict(entry)}
+        ## The words that bring the entry back, as one line the player can edit. Put back as a list on closing.
+        entry["keys"] = ", ".join(entry.get("keywords", []))
         renpy.show_screen("journal_edit", entry_id=entry_id)
         renpy.restart_interaction()
 
@@ -1018,6 +1022,9 @@ init python:
             if keep and entry["content"].strip():
                 ## The keywords follow what the player wrote: a name they added must be able to bring the entry back.
                 entry["who"] = aig_state.named_in(current_card(), entry["title"] + "\n" + entry["content"])
+                entry["keywords"] = [k.strip() for k in entry.pop("keys", "").replace("\n", ",").split(",") if len(k.strip()) >= 3][:20]
+                if entry["content"] != edit["before"].get("content"):
+                    entry.pop("gist", None)       # the one sentence it is remembered by follows the account the player wrote
             else:
                 entry.clear()
                 entry.update(edit["before"])
@@ -1238,7 +1245,7 @@ init python:
                 return
             old = seen[:max(1, len(seen) // 2)]
             try:
-                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old, prompts=preset["prompts"]))
+                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old, prompts=preset["prompts"]), sampling=dict(HELPER_SAMPLING, max_tokens=SUMMARY_TOKENS))
             except aig_llm.LLMError:
                 return
             state["summarized"] = state.get("summarized", 0) + len(old)
@@ -1789,10 +1796,12 @@ screen journal_edit(entry_id):
                 spacing 16
                 label _("Journal entry")
                 use settings_input(_("Title"), entry, "title")
+                use settings_input(_("Words that bring it back"), entry, "keys")
+                text _("Separated by commas. When one of these comes up in the story, the full entry below is sent to the story model again, the way a lorebook entry is. Add the words you would use for this scene.") size 20 color "#aaaaaa"
                 text _("What the story model is reminded of. Correct anything it got wrong, and add what must not be forgotten. Names you write here also bring the entry back when those people are around.") size 22 color "#999999"
                 button:
                     xfill True
-                    ysize 380
+                    ysize 270
                     padding (16, 12)
                     background "#00000080"
                     action settings_field(entry, "content").Toggle()

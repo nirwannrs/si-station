@@ -876,7 +876,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
                                                           journal.timeline(card, state),
-                                                          journal.describe(journal.recall(card, state, in_play), card)) if part),
+                                                          journal.describe(journal.recall(card, state, in_play, recent=_recent_text(card, state, "")), card)) if part),
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
@@ -996,8 +996,14 @@ def parse_suggestions(text, count):
     return [c.strip() for c in choices if isinstance(c, str) and c.strip()][:count]
 
 
+SUMMARY_LEAST, SUMMARY_PER_TURN, SUMMARY_MOST = 250, 6, 1200       # words: the least, for each turn covered, and the most
+
+
 def summary_prompt(card, state, turns, prompts=None):
-    system = prompt_text(prompts, "summarize")
+    ## The summary may grow with what it covers. Held to one fixed length, every fold squeezed the
+    ## whole story so far into the same few lines, and whole scenes were lost from it.
+    covered = state.get("summarized", 0) + len(turns)
+    system = prompt_text(prompts, "summarize", length="At most %d words." % min(SUMMARY_MOST, max(SUMMARY_LEAST, SUMMARY_PER_TURN * covered)))
     scenes = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
     user = "[Existing summary]\n%s\n\n[New scenes]\n%s" % (state["summary"] or "(none yet)", scenes)
     return system, [{"role": "user", "content": fill(card, state, user)}]
