@@ -311,6 +311,12 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(clock.read("18:13 | Day 12 since the exam"), {"minutes": 18 * 60 + 13, "day": 12})
         self.assertEqual(clock.read("12:05 AM"), {"minutes": 5, "day": None})
         self.assertEqual(clock.read("12:05 PM")["minutes"], 12 * 60 + 5)
+        for written, hour, day in (("[ 6 PM | Day 3 | Tavern ]", 18, 3), ("[ 1813 hours, Day 4 | Bridge ]", 18, 4), ("[ 18h13 | Paris ]", 18, None), ("[ Time: 18.13 / Date: 12 Sept ]", 18, None),
+                                   ("[ 6:13PM | D-12 | Hideout ]", 18, 12), ("[ 9am, Rain, 16.50 \u00b0C, 3.5 km ]", 9, None)):
+            self.assertEqual((clock.read(written)["minutes"] // 60, clock.read(written)["day"]), (hour, day), written)   # a card's own form of the line
+        self.assertIn("evening", clock.hour_line("[ Evening | 3rd of Frostfall | Whiterun ]"))          # the hour as a word still says the part of the day
+        self.assertEqual(clock.read("[ Evening | 3rd of Frostfall ]"), {"minutes": None, "day": None})
+        self.assertIsNone(clock.hour_line("[ Hour of the Wolf | the Long Night ]"))
         for unreadable in ("high noon | the third bell", "25:00", "", None, "ratio 3:4:5"):
             self.assertEqual(clock.read(unreadable), {"minutes": None, "day": None}, unreadable)
         self.assertIn("around midday", clock.hour_line(self.line("12:10 PM")))
@@ -342,6 +348,8 @@ class ClockTest(unittest.TestCase):
         s["history"] = []
         self.assertEqual(prompt.header_place(c, s, self.line("09:45 PM", place="The Stable - by the mare's stall")), "stable")
         self.assertIsNone(prompt.header_place(c, s, self.line("09:45 PM", place="A ditch by the road")))
+        self.assertEqual(prompt.header_place(c, s, "[ 9:45 PM / Location: Stable, by the door to the Common Room / Rain ]"), "stable")   # no pin: the first place named
+        self.assertIsNone(prompt.header_place(c, s, "[ 9:45 PM / a comfortable, stable-smelling loft / Rain ]"))                        # a word, not the place
         wrong = prompt.clock_problems(c, s, before, self.line("09:45 PM", place="Stable - by the mare's stall"))
         self.assertEqual(len(wrong), 1)
         self.assertIn("at Stable, but the game has them at Common Room", wrong[0])

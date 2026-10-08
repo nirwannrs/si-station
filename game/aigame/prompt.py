@@ -335,16 +335,20 @@ STUCK = 3       # turns the clock may stand at the same minute before it is take
 
 def header_place(card, state, line):
     """The id of the known place the line puts the player in, or None when it names none the game
-    has. The line gives the place and then the spot within it, so the longest name it opens with wins."""
-    said = _plain_name(clock.place_part(line) or "")
-    named = [(len(_plain_name(place["name"])), lid) for lid, place in places(card, state).items()
-             if _plain_name(place["name"]) and said.startswith(_plain_name(place["name"]))]
-    return max(named)[1] if named else None
-
-
-def _plain_name(text):
-    plain = "".join(c for c in text.lower() if c.isalnum())
-    return plain[3:] if plain.startswith("the") and len(plain) > 3 else plain
+    has. The line gives the place and then the spot within it, so the name that comes first wins,
+    and the longer of two that start together ("Hideout Kitchen" over "Hideout")."""
+    said, found, loose = clock.place_part(line), [], re.I
+    if said is None:
+        # No pin marks the place, so the whole line is searched, and only for a name written as the
+        # card writes it: "a stable door" in the weather is not the Stable.
+        said, loose = line or "", 0
+    for lid, place in places(card, state).items():
+        name = place["name"].strip()
+        for wanted in set((name, name[4:] if name.lower().startswith("the ") else name)):
+            at = re.search(r"(?<!\w)%s(?!\w)" % re.escape(wanted), said, loose) if wanted else None
+            if at:
+                found.append((at.start(), -len(wanted), lid))
+    return min(found)[2] if found else None
 
 
 def clock_problems(card, state, before, now):
