@@ -27,6 +27,7 @@ HELPER_TASKS = (
     ("write_journal", "Keep the journal (remember each scene)"),
     ("move_world", "Move the world on (where people go while the player is elsewhere)"),
     ("keep_time", "Keep the clock (put the time and place line right when it slips)"),
+    ("recall_memory", "Remember (pick the earlier scenes this turn calls for)"),
 )
 
 # Every action is listed with the card system it needs, so a card only teaches the model the
@@ -838,7 +839,7 @@ def _turn_message(player_text, results):
 VOLATILE_SLOTS = ("summary", "lorebook", "state", "quests")
 
 
-def narrator_prompt(card, state, preset, player_text, results, record=True, check=False, header=False):
+def narrator_prompt(card, state, preset, player_text, results, record=True, check=False, header=False, recalled=()):
     """Returns (system, messages). One message carries "cache": True, marking the end of the part
     that will be identical next turn; llm.chat_request turns that into the provider's own marker.
 
@@ -876,7 +877,7 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
                                                           journal.timeline(card, state),
-                                                          journal.describe(journal.recall(card, state, in_play, recent=_recent_text(card, state, "")), card)) if part),
+                                                          journal.describe(journal.recall(card, state, in_play, recent=_recent_text(card, state, ""), picked=recalled), card)) if part),
         "action_protocol": lambda: action_protocol(card, record, preset.get("prompts")),
     }
 
@@ -996,17 +997,43 @@ def parse_suggestions(text, count):
     return [c.strip() for c in choices if isinstance(c, str) and c.strip()][:count]
 
 
-SUMMARY_LEAST, SUMMARY_PER_TURN, SUMMARY_MOST = 250, 6, 1200       # words: the least, for each turn covered, and the most
+SUMMARY_WORDS, SUMMARY_WORDS_ALONE = 350, 600       # the most words: beside a journal, and as the only memory
+SUMMARY_STANDING = ("The narrator is shown, apart from your summary, a list of every scene that has happened, in order. So do not retell events: what happened is kept there and cannot be lost. "
+                    "Yours is how things stand now. Something that happened belongs here only for what it left behind: a promise, a debt, a grudge, a secret, a changed footing between two people.")
+SUMMARY_EVENTS = "Yours is the only record the narrator has of these scenes. Keep the events that matter as well, briefly and in the order they happened, with when they happened where the scenes say."
 
 
-def summary_prompt(card, state, turns, prompts=None):
-    ## The summary may grow with what it covers. Held to one fixed length, every fold squeezed the
-    ## whole story so far into the same few lines, and whole scenes were lost from it.
-    covered = state.get("summarized", 0) + len(turns)
-    system = prompt_text(prompts, "summarize", length="At most %d words." % min(SUMMARY_MOST, max(SUMMARY_LEAST, SUMMARY_PER_TURN * covered)))
+def summary_prompt(card, state, turns, prompts=None, listed=False):
+    ## What the summary is for depends on whether the journal is keeping the events. With a journal,
+    ## every scene has its own line in a list that is only added to, so the summary need not retell
+    ## anything: it holds how things stand, which stays short however long the story runs, because
+    ## what is settled leaves it. With no journal it is the only memory, and has to carry the events
+    ## too, in more room.
+    system = fill(card, state, prompt_text(prompts, "summarize", scope=SUMMARY_STANDING if listed else SUMMARY_EVENTS,
+                                           length="At most %d words." % (SUMMARY_WORDS if listed else SUMMARY_WORDS_ALONE)))
     scenes = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
     user = "[Existing summary]\n%s\n\n[New scenes]\n%s" % (state["summary"] or "(none yet)", scenes)
     return system, [{"role": "user", "content": fill(card, state, user)}]
+
+
+# The memory helper: picks, from the list of scenes the story model no longer sees, the ones this
+# turn calls for. It reads the player's message alongside the helper that works out their actions,
+# so it adds no wait. Words can only find a scene spoken of in its own words (see journal.recall).
+
+def recall_prompt(card, state, player_text, prompts=None):
+    scenes = "\n".join("%d. %s" % (entry["id"], journal.scene_line(card, entry)) for entry in journal.candidates(state))
+    user = "[Earlier scenes]\n%s\n\n%s\n\n[The last reply]\n%s\n\n[The player's message]\n%s" % (
+        scenes, describe_scene(card, state), last_narration(card, state)[-1500:], player_text)
+    return prompt_text(prompts, "recall_memory"), [{"role": "user", "content": fill(card, state, user)}]
+
+
+def parse_recall(text, state):
+    """The ids of the entries the memory helper picked, in its order. Anything that is not the id
+    of an entry is dropped, and an answer that cannot be read picks nothing."""
+    parsed = extract_json(text or "")
+    picked = parsed.get("scenes") if isinstance(parsed, dict) and isinstance(parsed.get("scenes"), list) else []
+    known = set(entry["id"] for entry in journal.candidates(state))
+    return [n for n in picked if isinstance(n, int) and not isinstance(n, bool) and n in known][:journal.POINTED]
 
 
 def journal_prompt(card, state, turns, prompts=None):

@@ -102,7 +102,9 @@ def _preview_build(card, state, preset, key):
         "judge_quests": lambda: game_prompt.judge_prompt(card, state, said, reply, prompts=prompts),
         "direct_scene": lambda: game_prompt.director_prompt(card, state, game_prompt.split_paragraphs(reply + "\n\n(Its second paragraph.)"), prompts=prompts),
         "suggest_choices": lambda: game_prompt.suggest_prompt(card, state, (preset.get("suggestions") or {}).get("count", 3), prompts=prompts),
-        "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts),
+        "summarize": lambda: game_prompt.summary_prompt(card, state, state["history"], prompts=prompts, listed=True),
+        "recall_memory": lambda: game_prompt.recall_prompt(card, dict(state, summarized=len(state["history"]), journal=[
+            {"id": n + 1, "title": "(The title of an earlier scene.)", "gist": "(The one sentence it is remembered by.)", "content": "", "keywords": [], "start": 0, "end": 0} for n in range(2)]), said, prompts=prompts),
         "write_journal": lambda: game_prompt.journal_prompt(card, state, state["history"], prompts=prompts),
         "move_world": lambda: game_prompt.world_prompt(card, state, prompts=prompts),
         "keep_time": lambda: game_prompt.timekeeper_prompt(card, state, "(The line that headed the reply before.)", "(The line that heads this reply.)",

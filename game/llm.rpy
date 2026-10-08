@@ -40,8 +40,8 @@ init python:
     from aigame import prompt as aig_prompt
 
     HELPER_SAMPLING = {"temperature": 0.2, "max_tokens": 1000}
-    ## The running summary grows with the story (see prompt.summary_prompt), so its reply needs more room than other helpers'.
-    SUMMARY_TOKENS = 3000
+    ## The running summary is a few hundred words (see prompt.summary_prompt), more than other helpers write.
+    SUMMARY_TOKENS = 2500
     SUGGEST_SAMPLING = {"temperature": 0.8, "max_tokens": 1000}
     CHAT_TIMEOUT = 180
     ## Most recent turns listed in the History menu, and on the play screen of a text-only card.
@@ -824,10 +824,23 @@ init python:
         stage = "work out what you are doing"
         try:
             ## A card with nothing the player can act on skips the call that works out their actions.
-            attempts = []
-            if resolve and aig_prompt.player_action_types(card):
-                attempts = aig_prompt.parse_resolver(once("attempts", lambda: run_helper_sure(
-                    "resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"]), "actions")), card)
+            ## Two helpers read the player's message before the story model does, side by side: one works
+            ## out what the player is doing, the other picks the earlier scenes this turn calls for. The
+            ## first must answer. The second is help, not a rule: without it the journal's own lookup decides.
+            attempts, first = [], {}
+            wants_actions = resolve and aig_prompt.player_action_types(card)
+            if wants_actions and "attempts" not in have:
+                first["attempts"] = ("resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"]), "actions")
+            if params().get("journal", True) and aig_journal.worth_asking(state) and "memory" not in have:
+                first["memory"] = ("recall_memory", aig_prompt.recall_prompt(card, state, text, prompts=preset["prompts"]), "scenes")
+            for name, answer in run_helpers_together(first).items():
+                if not isinstance(answer, Exception):
+                    have[name] = answer
+                elif name == "attempts":
+                    raise answer
+            if wants_actions:
+                attempts = aig_prompt.parse_resolver(have["attempts"], card)
+            recalled = aig_prompt.parse_recall(have.get("memory"), state)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
             ## Gagged, blinded or deafened: the story model is told how the player's message lands.
             results = results + aig_prompt.sense_notes(card, state, text)
@@ -837,7 +850,7 @@ init python:
             ## story model is told who they are in this turn's message, which is kept as it was sent.
             entering = aig_prompt.arrivals(card, state, text)
             stage = "write the story"
-            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper, check=params().get("check_first", False), header=params().get("header", True))
+            system, messages = aig_prompt.narrator_prompt(card, state, preset, text, results, record=not keeper, check=params().get("check_first", False), header=params().get("header", True), recalled=recalled)
             reply, cut_short, broke_off = once("reply", lambda: (llm_call("main", system, messages, story_sampling()), runtime.cut_short, runtime.reply_dropped))
             runtime.cut_short = cut_short
             narration, world_actions = aig_prompt.parse_narration(reply)
@@ -1245,7 +1258,7 @@ init python:
                 return
             old = seen[:max(1, len(seen) // 2)]
             try:
-                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old, prompts=preset["prompts"]), sampling=dict(HELPER_SAMPLING, max_tokens=SUMMARY_TOKENS))
+                state["summary"] = run_helper("summarize", aig_prompt.summary_prompt(card, state, old, prompts=preset["prompts"], listed=bool(params().get("journal", True) and state.get("journal"))), sampling=dict(HELPER_SAMPLING, max_tokens=SUMMARY_TOKENS))
             except aig_llm.LLMError:
                 return
             state["summarized"] = state.get("summarized", 0) + len(old)

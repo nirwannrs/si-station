@@ -129,7 +129,20 @@ def _terms(entry):
     return terms
 
 
-def recall(card, state, text, limit=None, recent=""):
+def candidates(state):
+    """The entries that can be brought back: those whose turns the story model no longer sees, and
+    that are not pinned (a pinned entry is always sent)."""
+    gone = state.get("summarized", 0)
+    return [entry for entry in state.get("journal", []) if entry["end"] <= gone and not entry.get("pinned")]
+
+
+def worth_asking(state):
+    """Whether there are enough scenes out of sight that picking among them is a job for the memory
+    helper. With only a few, the words that come up decide well enough."""
+    return len(candidates(state)) > RECALLED
+
+
+def recall(card, state, text, limit=None, recent="", picked=()):
     """The entries worth sending in full this turn. Only scenes whose turns the model no longer
     sees are candidates; a scene still in the prompt needs no reminder.
 
@@ -140,6 +153,11 @@ def recall(card, state, text, limit=None, recent=""):
     scenes it points at are sent, up to POINTED, and those that only share a common name with the
     text are left out. When there are only such common words to go by, the best RECALLED are sent.
     Either way no more than ROOM characters, so a long story cannot flood the prompt.
+
+    picked is the ids of the entries the memory helper chose for this turn (see
+    prompt.recall_prompt). Words can only find a scene that is spoken of in its own words; the
+    helper reads the list of scenes and knows that "our duel at noon" is the broom race. What it
+    picks comes first, and what the words find is added while there is room.
 
     An entry is relevant when the text in play (what the player typed, what the story just said)
     uses one of its keywords; when the player has just come back to where it happened; or when
@@ -181,6 +199,8 @@ def recall(card, state, text, limit=None, recent=""):
     for entry, hits in found:
         score = sum(3.0 * weight * math.log(1.0 + float(len(found)) / shared[term]) / math.log(1.0 + len(found)) for term, weight in hits.items())
         score += (2 if arrived and entry.get("place") and entry["place"] == me["location"] else 0) + (1 if joined & set(entry.get("who", [])) else 0)
+        if entry["id"] in picked:
+            score += 6
         if score:
             scored.append((score, entry["end"], entry))
     scored.sort(key=lambda item: (-item[0], -item[1]))
@@ -205,6 +225,16 @@ def scene_facts(state):
             "with": sorted(who for who, actor in state["actors"].items() if who != PLAYER and actor["location"] is not None and actor["location"] == me["location"])}
 
 
+def scene_line(card, entry):
+    """One scene in one line: when it was, what it is called, the sentence it is remembered by,
+    and who of the people named in it was there."""
+    read = clock.read(entry.get("when", ""))
+    when = ", ".join(part for part in ("Day %d" % read["day"] if read["day"] is not None else "",
+                                       "%02d:%02d" % (read["minutes"] // 60, read["minutes"] % 60) if read["minutes"] is not None else "") if part)
+    seen = [card.characters[c]["name"] for c in entry.get("who", []) if c in card.characters and c in entry.get("there", entry.get("who", []))]
+    return "%s%s. %s%s" % (when + ": " if when else "", entry["title"].rstrip("."), gist(entry), " (there: %s)" % ", ".join(seen[:8]) if seen else "")
+
+
 def timeline(card, state):
     """Everything that has happened, scene by scene, oldest first: for each scene whose turns the
     story model no longer sees, when it was, what it is called, the one sentence it is remembered
@@ -214,15 +244,8 @@ def timeline(card, state):
     turns are folded into it and loses what it has no room for; a full entry comes back only when
     one of its words comes up, and the player may call a race a duel. Without this list, someone
     who stood and watched a scene could be written as never having heard of it."""
-    gone, lines = state.get("summarized", 0), []
-    for entry in state.get("journal", []):
-        if entry["end"] > gone:
-            continue
-        read = clock.read(entry.get("when", ""))
-        when = ", ".join(part for part in ("Day %d" % read["day"] if read["day"] is not None else "",
-                                           "%02d:%02d" % (read["minutes"] // 60, read["minutes"] % 60) if read["minutes"] is not None else "") if part)
-        seen = [card.characters[c]["name"] for c in entry.get("who", []) if c in card.characters and c in entry.get("there", entry.get("who", []))]
-        lines.append("- %s%s. %s%s" % (when + ": " if when else "", entry["title"].rstrip("."), gist(entry), " (there: %s)" % ", ".join(seen[:8]) if seen else ""))
+    gone = state.get("summarized", 0)
+    lines = ["- " + scene_line(card, entry) for entry in state.get("journal", []) if entry["end"] <= gone]
     if not lines:
         return ""
     return ("[What has happened so far, scene by scene]\n%s\nAll of these happened, and whoever is named with a scene was there and remembers it. "

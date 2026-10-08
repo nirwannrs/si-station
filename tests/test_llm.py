@@ -209,10 +209,14 @@ class PromptTest(unittest.TestCase):
         self.assertIn("Rain follows you", messages[0]["content"])
         turns = [{"player": "I wave.", "results": [], "narration": "Mira nods at {{user}}."}]
         self.assertIn("Mira nods at Ash.", prompt.summary_prompt(self.card, self.state, turns)[1][0]["content"])
-        self.assertIn("At most 250 words.", prompt.summary_prompt(self.card, self.state, turns)[0])
-        self.assertIn("Nothing that is in the existing summary is lost", prompt.summary_prompt(self.card, self.state, turns)[0])
-        self.assertIn("At most 840 words.", prompt.summary_prompt(self.card, dict(self.state, summarized=140 - len(turns)), turns)[0])     # it grows with what it covers
-        self.assertIn("At most 1200 words.", prompt.summary_prompt(self.card, dict(self.state, summarized=5000), turns)[0])                # up to a point
+        alone, beside = prompt.summary_prompt(self.card, self.state, turns)[0], prompt.summary_prompt(self.card, self.state, turns, listed=True)[0]
+        self.assertIn("At most 600 words.", alone)                                   # the only memory: it carries the events too
+        self.assertIn("Keep the events that matter as well", alone)
+        self.assertIn("At most 350 words.", beside)                                  # beside a journal: how things stand, and no longer however long the story
+        self.assertIn("do not retell events", beside)
+        for text in (alone, beside):
+            self.assertIn("Take out what has been settled for good", text)
+            self.assertNotIn("{{", text)
 
 
 class DirectorTest(unittest.TestCase):

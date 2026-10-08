@@ -111,6 +111,18 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(self.titles("And then what?"), [])
         self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "And then what?", recent="We spoke of the broom race.")], ["Broom race, silence bet"])   # still the subject a turn later
         self.assertEqual(self.titles("The broom race, Mira!"), ["Broom race, silence bet"])                             # a word that points at one scene: the others, sharing only her name, stay out
+        # The memory helper reads meaning: it is shown one numbered line a scene, and what it picks is sent first.
+        self.assertTrue(journal.worth_asking(self.state))
+        asked = prompt.recall_prompt(self.card, self.state, "That duel at noon, Mira.")[1][0]["content"]
+        self.assertIn("\n3. Day 1, 11:08: Broom race, silence bet. ", asked)
+        self.assertIn("[The player's message]\nThat duel at noon, Mira.", asked)
+        self.assertEqual(prompt.parse_recall('{"scenes": [3, 99, "x", true]}', self.state), [3])
+        self.assertEqual(prompt.parse_recall("no idea", self.state), [])
+        self.assertEqual(prompt.parse_recall(None, self.state), [])
+        self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "That duel at noon, Mira.", picked=[3])], ["Lunch and a yard duel", "Broom race, silence bet"])
+        self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "Hm.", picked=[3])], ["Broom race, silence bet"])
+        tail = prompt.narrator_prompt(self.card, self.state, self.preset, "Hm.", [], recalled=[3])[1][-1]["content"]
+        self.assertIn("[Remembered from earlier in the story]\n- Broom race, silence bet", tail)
         listed = journal.timeline(self.card, self.state)
         self.assertIn("\n- Day 1, 11:08: Broom race, silence bet. %s and Mira talked; %s's bet stands. (there: Mira Oakhand)\n" % (me, me), listed)                                             # and every scene is always named, with when it was
         self.assertEqual(listed.count("\n- "), 5)

@@ -402,11 +402,32 @@ You suggest what the player could do next in a text adventure. Give {{count}} sh
 Reply with JSON only: {"choices": ["...", "..."]}""")
 
 
-_builtin('summarize', 'helper', "Summarize old turns", "Folds older turns into the running summary.",
-         {'length': 'how long the summary may be, which grows with how much of the story it covers'}, """\
-You keep the running summary of a text adventure so the narrator can remember earlier events. Merge the existing summary with the new scenes into one summary in past tense. Keep names, promises, secrets learned, relationships and unresolved threads. Where the scenes give a time and place, keep when the things that matter happened (the day or date), in the story's own terms. Each new scene says who was present: for anything it could matter later who knows of, say who was there for it or who was told. Leave out inventory, money and stats; the game tracks those.
-Nothing that is in the existing summary is lost in the new one. Say it in fewer words if you must, but every event, promise, secret and who knows of it stays; only something that has been settled for good and can no longer matter may shrink to a clause. Keep events in the order they happened.
+_builtin('summarize', 'helper', "Summarize old turns", "Folds older turns into the running summary. With the journal on, the summary keeps how things stand and the journal keeps what happened.",
+         {'scope': "what the summary is for: how things stand when the journal keeps the events, the events too when there is no journal", 'length': 'how long the summary may be'}, """\
+You keep the running summary of a text adventure, which the narrator reads every turn. Older scenes are leaving the narrator's sight, and you fold them into the summary you already have.
+{{scope}}
+
+Keep what is true now and will matter later:
+- who each person is to {{user}} and how they stand with them now;
+- what is still open: promises, debts, bets, plans, threats and questions, with who made them and when they fall due;
+- secrets, and who knows each one. Each new scene says who was present: say who saw or was told what matters;
+- standing arrangements: where {{user}} lives and belongs, what they are bound to, what they are known for.
+Update what the new scenes changed. Take out what has been settled for good and can no longer matter; that is how the summary stays short. Add what is new. Never drop something that is still open just to save room: say it in fewer words.
+Past tense for what happened, present for how things are. Use names. Leave out inventory, money and stats; the game tracks those.
 {{length}} Reply with the summary only.""")
+
+
+_builtin('recall_memory', 'helper', "Remember", "Picks, from the list of scenes the story model no longer sees, the ones this turn calls for, so they are sent to it in full. It reads meaning, where the journal's own lookup can only match words.",
+         {}, """\
+You are the memory of a text adventure. The narrator is about to answer the player and no longer sees the earlier scenes; it has only the one line on each that you see listed. Pick the scenes it needs told in full to answer well.
+
+Pick a scene when:
+- the player's message or the last reply refers to it, in whatever words: a race may be called a duel, a promise "what you said", a time "this noon" or "back at the exam";
+- it holds something that bears on what is being talked about or done right now: a bet now being settled, a secret now in danger, a question now being answered;
+- someone speaking or spoken to now was at the heart of it, and it would shape how they answer.
+Do not pick a scene only because someone in it is present; companions are in nearly every scene. When nothing earlier is touched on, pick none. At most five, the most needed first.
+
+Reply with JSON only, giving the numbers of the scenes: {"scenes": [3, 8]}""")
 
 
 # How each one is sent. A helper job is one call: its wording as the instruction, then a single
@@ -464,10 +485,16 @@ _sends("suggest_choices", _HELPER,
        ("[Active quests]", "open quests, as the player sees them; only when there are any", "The card's quests, and the save for how far each has got.", "card:quests"),
        ("[Last narration]", "the reply the player is answering", "The story model's reply this turn.", None),
        count=("How many suggestions to ask for. Set in this preset, under About and starting values.", "preset:settings"))
-_sends("summarize", _HELPER + " The reply may be longer than other helpers' replies.",
+_sends("summarize", _HELPER + " Its reply may be longer than other helpers' replies.",
        ("[Existing summary]", "the summary so far", "The save: what this same job wrote the last time it ran. \"(none yet)\" the first time.", None),
        ("[New scenes]", "the turns being folded into it", "The save: the oldest turns that are not in the summary yet, word for word, each as what the player typed and what the story model replied. The game takes the older half of the turns the story model still sees, once there are more than the player's \"summarize after\" number or the prompt no longer fits the context size.", "preset:settings"),
-       length=("A sentence the game writes: at most so many words. The number is 6 for each turn the summary covers, never under 250 or over 1200.", None))
+       scope=("A few sentences the game writes. With the journal on, the story model is always sent one line on every past scene, so the summary is told to keep how things stand and not retell events. With the journal off, it is told to keep the events too.", None),
+       length=("A sentence the game writes: at most 350 words beside a journal, 600 as the only memory.", None))
+_sends("recall_memory", _HELPER + " It is called at the start of a turn, at the same time as Understand what the player does, once more than three scenes have left the story model's sight. If it cannot answer, the journal's own word lookup decides alone.",
+       ("[Earlier scenes]", "every journal entry whose turns the story model no longer sees, one numbered line each: when, title, the one sentence it is remembered by, who was there", "The journal: written by Keep the journal as each scene ends.", "preset:helpers/write_journal"),
+       ("[The scene right now]", "where the player is and who is with them", "The save, and the line on what is going on that Direct the scene wrote last turn.", "preset:helpers/direct_scene"),
+       ("[The last reply]", "the end of the story model's previous reply", "The save.", None),
+       ("[The player's message]", "what the player just typed", "The player, this turn.", None))
 _sends("move_world", _HELPER,
        ("[Places]", "every place the game has, with its id", "The card's locations, and any the story has added.", "card:locations"),
        ("[The player]", "where the player is now", "The save.", None),
