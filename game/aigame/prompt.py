@@ -11,7 +11,7 @@ from .actions import paid_lately, shop_price
 from .card import PLAYER
 from .llm import extract_json
 from . import journal
-from .text import keep_marks_paired
+from .text import keep_marks_paired, muffled
 from .wording import prompt_text
 from .state import available_quests, cast_in_play, named_in, describe_states, limits, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
 
@@ -418,14 +418,29 @@ SENSE_NOTES = {
 }
 
 
-def sense_notes(card, state):
+def sense_notes(card, state, text=""):
     """Notes for this turn's message on how it lands, one for each of speech, sight and hearing that
     the player's states have taken. They travel with the engine results as things left to the story
-    (ok is None), so the player is not shown them and the turn is kept as it was sent."""
+    (ok is None), so the player is not shown them and the turn is kept as it was sent. text is the
+    player's message; what they tried to say in it is given as the sound it made."""
     me = state["actors"][PLAYER]
     bond = ", or a high %s toward them" % card.relationship_name if uses(card, "relationships") else ""
-    return [{"action": None, "ok": None, "message": SENSE_NOTES[what] % {"name": me["name"], "state": name.lower(), "bond": bond}}
-            for what, name in limits(card, me) if what in SENSE_NOTES]
+    notes = []
+    for what, name in limits(card, me):
+        if what in SENSE_NOTES:
+            said = muffled(text)[1] if what == "speech" else []
+            notes.append({"action": None, "ok": None, "message": SENSE_NOTES[what] % {"name": me["name"], "state": name.lower(), "bond": bond} + (
+                " What came out of them, to quote if you tell it: %s" % " ... ".join('"%s"' % s for s in said) if said else "")})
+    return notes
+
+
+def heard_as(card, state, text):
+    """The player's message as the game shows it when they cannot speak: their words as the noise
+    they made. None when they can speak, or when nothing in the message can be told to be speech."""
+    if not any(what == "speech" for what, name in limits(card, state["actors"][PLAYER])):
+        return None
+    shown, said = muffled(text)
+    return shown if said else None
 
 
 def _state_parts(card, actor):

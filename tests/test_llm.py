@@ -316,8 +316,14 @@ class StatesPromptTest(unittest.TestCase):
         self.assertEqual([n["ok"] for n in notes], [None])
         for part in ["cannot speak (mouth shut)", "what they meant, not what anyone heard", "a guess can be wrong", "never the wording"]:
             self.assertIn(part, notes[0]["message"])
+        said = 'I shout "Run, Mira!"'
+        self.assertEqual(prompt.heard_as(card, state, said), 'I shout "Mmh, Mnnn!"')
+        self.assertIn('What came out of them, to quote if you tell it: "Mmh, Mnnn!"', prompt.sense_notes(card, state, said)[0]["message"])
+        self.assertEqual(prompt.heard_as(card, state, "I'm still me, you know? *I tug at the knot* (ooc: hi) Let go!"),
+                         "Hmm nnngh mm, mph mmmf? *I tug at the knot* (ooc: hi) Mnn mr!")
+        self.assertIsNone(prompt.heard_as(card, state, "I walk to the door and try the handle."))   # nothing marks any of it as speech
         with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
-            sent = prompt.narrator_prompt(card, state, json.load(f), 'I shout "Run, Mira!"', notes)[1][-1]["content"]
+            sent = prompt.narrator_prompt(card, state, json.load(f), said, notes)[1][-1]["content"]
         self.assertIn("UP TO YOU: %s cannot speak" % state["actors"]["player"]["name"], sent)
         apply_actions(card, state, [{"type": "clear_state", "state": "mouth shut"}])
         self.assertEqual(prompt.sense_notes(card, state), [])

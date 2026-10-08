@@ -56,3 +56,44 @@ def keep_marks_paired(pieces):
         bold, italic = _open_marks(piece)
         fixed.append(piece + ("*" if italic else "") + ("**" if bold else ""))
     return fixed
+
+
+# What a mouth that cannot form words lets out. A word always comes out as the same sound, so a
+# message reads the same every time it is shown.
+_MUFFLES = ("mmph", "mmh", "nngh", "hmm", "mrrf", "mnn", "hnn", "mmf", "nnh", "mph")
+_WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+_QUOTED = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
+_ACTED = re.compile(r"(\*+[^*\n]+\*+|\([^()\n]*\))")
+
+
+def _muffle_word(match):
+    word = match.group(0)
+    sound = _MUFFLES[sum(ord(c) for c in word.lower()) % len(_MUFFLES)]
+    if len(word) <= 2:
+        sound = sound[:2]
+    elif len(word) > len(sound):
+        sound = sound[0] + sound[1] * (min(len(word), 8) - len(sound) + 1) + sound[2:]
+    return sound.capitalize() if word[0].isupper() else sound
+
+
+def muffled(text):
+    """The message as it sounds from someone who cannot speak: (the text with what is spoken turned
+    to muffled noise, the spoken pieces as they came out). What is spoken is whatever stands in
+    double quotes; in a message with none that sets its actions in *asterisks*, it is everything
+    outside them. A message that marks neither is left as typed, since nothing tells its speech
+    from what its writer does."""
+    said = []
+
+    def sound(piece):
+        out = _WORD.sub(_muffle_word, piece)
+        if out.strip() and out != piece:
+            said.append(out.strip())
+        return out
+
+    if _QUOTED.search(text):
+        shown = _QUOTED.sub(lambda m: m.group(0)[0] + sound(m.group(1) or m.group(2)) + m.group(0)[-1], text)
+    elif re.search(r"\*[^*\n]+\*", text):
+        shown = "".join(piece if n % 2 else sound(piece) for n, piece in enumerate(_ACTED.split(text)))
+    else:
+        shown = text
+    return shown, said

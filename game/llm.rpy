@@ -828,7 +828,8 @@ init python:
                     "resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"]), "actions")), card)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
             ## Gagged, blinded or deafened: the story model is told how the player's message lands.
-            results = results + aig_prompt.sense_notes(card, state)
+            results = results + aig_prompt.sense_notes(card, state, text)
+            heard = aig_prompt.heard_as(card, state, text)
 
             ## Whoever the player just named, or the last reply did, enters the story with this turn. The
             ## story model is told who they are in this turn's message, which is kept as it was sent.
@@ -891,6 +892,9 @@ init python:
         runtime.kept_turn = None
         turn = {"player": text, "results": [{"ok": r["ok"], "message": r["message"]} for r in results], "cast": entering,
                 "narration": narration, "direction": direction}
+        if heard:
+            ## What the player said as the noise it made. The log shows this; the models are sent what was meant.
+            turn["heard"] = heard
         ## Where the player was and who with when this turn began, for the journal to tell arrivals and reunions by.
         turn.update(aig_journal.scene_facts(state["restore_point"]))
         ## Who was there for this turn: with the player as it began or as it ended, or speaking in it.
@@ -1452,7 +1456,7 @@ screen turn_text(turn=None):
     vbox:
         spacing 12
         if turn:
-            text rich("> " + turn["player"]) color "#aaaaaa"
+            text rich("> " + (turn.get("heard") or turn["player"])) color "#aaaaaa"
         ## A character's name heads their part once: what they do and what they say after it are
         ## theirs until someone else, or the narration, takes over.
         $ lines = scene_lines(turn)
