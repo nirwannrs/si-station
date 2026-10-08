@@ -332,6 +332,9 @@ class StatesPromptTest(unittest.TestCase):
         self.assertIn(" *I tug at the knot* (ooc: hi) ", mixed)                                     # what is done, and asides, stay as typed
         self.assertIsNone(re.search(r"[aeiouy]", mixed.replace("*I tug at the knot* (ooc: hi)", "").lower()), mixed)
         self.assertIsNone(prompt.heard_as(card, state, "I walk to the door and try the handle."))   # nothing marks any of it as speech
+        figures = prompt.heard_as(card, state, '"It\'s my 2nd try, at 3pm, for 4,000 gold and room 12b!"')
+        self.assertIsNone(re.search(r"[0-9aeiouy]", figures.lower()), figures)                      # figures are spoken too, and come out as sound
+        self.assertEqual(len(re.findall(r"[a-z]+", figures.lower())), 12, figures)
         with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
             sent = prompt.narrator_prompt(card, state, json.load(f), said, notes)[1][-1]["content"]
         self.assertIn("UP TO YOU: %s cannot speak" % state["actors"]["player"]["name"], sent)

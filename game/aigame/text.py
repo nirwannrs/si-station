@@ -65,7 +65,9 @@ def keep_marks_paired(pieces):
 _SOUNDS = ("mmph", "mmf", "mph", "hmph", "nngh", "mmh", "hmm", "mrph", "mmrf", "nnf", "hnn", "mnf", "ngh", "mmgh", "hmf", "mrrm",
            "nmph", "hnngh", "mrgh", "fmm", "gmph", "mhm", "nnh", "mrf", "hrm", "mnn", "rmph", "mmn", "grm", "hmn", "mff", "nph")
 _SHORT = ("mm", "mh", "hm", "hn", "nn", "mf", "ng", "nh")
-_WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+# A word is letters and digits together, so "2nd", "3pm" and "4,000" each come out as one sound
+# with no figure left standing in it.
+_WORD = re.compile(r"\d+(?:[.,:/]\d+)*[^\W\d_]*|[^\W_]+(?:['’][^\W_]+)*")
 _QUOTED = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
 _ACTED = re.compile(r"(\*+[^*\n]+\*+|\([^()\n]*\))")
 
