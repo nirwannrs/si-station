@@ -103,6 +103,19 @@ def apply_action(card, state, action, by_player=False):
             # story's call, not the engine's. So this is neither applied nor refused: ok is None.
             return {"action": action, "ok": None, "message": "%s wants to go to %s, which is not next to %s. Whether and how they get there is for the story to decide." % (
                 player["name"], places(card, state)[wanted]["name"], here["name"])}
+    if by_player and action["type"] in ("use_item", "equip", "transfer_item"):
+        try:
+            iid, item = _item(card, state, action)
+        except Rejected:
+            iid, item = None, None
+        me = state["actors"][PLAYER]
+        if iid is None or not (me["inventory"].get(iid) or iid in me["equipment"].values()):
+            # Not something they carry. It may be no slip at all: a cup poured for them, bread on the
+            # table, a coat on a chair are in the scene and not in anyone's pack. Refusing would make
+            # the story tell them failing to drink their own wine, so the story is told and decides.
+            name = item["name"] if item else str(action.get("item"))
+            return {"action": action, "ok": None, "message": "%s is doing something with %s and carries none, so nothing in their inventory is used or changed. If it is a thing that is there in the scene (served to them, lying within reach, handed over just now), tell it as they do it. If they could only mean one of their own, they find they have none." % (
+                me["name"], name)}
     if by_player and action["type"] == "equip" and card.has("equipment") and action.get("slot") not in SLOTS:
         try:
             iid, item = _item(card, state, action)

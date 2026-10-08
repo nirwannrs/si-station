@@ -252,6 +252,19 @@ class EngineTest(unittest.TestCase):
         self.ok(type="set_state", state="asleep")
         self.assertEqual([what for what, name in limits(self.card, self.me)], ["all", "speech", "sight", "hearing"])
 
+    def test_what_the_player_does_with_a_thing_they_do_not_carry_is_left_to_the_story(self):
+        before = copy.deepcopy(self.state)
+        for attempt in ({"type": "use_item", "item": "stew"},                      # a real item, not theirs: the bowl on the table
+                        {"type": "use_item", "item": "cup of wine"},               # no item at all
+                        {"type": "equip", "item": "a coat from the chair"},
+                        {"type": "transfer_item", "item": "stew", "to": "mira"}):
+            left = apply_action(self.card, self.state, attempt, by_player=True)
+            self.assertIsNone(left["ok"], left["message"])
+            self.assertIn("carries none", left["message"])
+        self.assertEqual(self.state, before)
+        self.assertTrue(apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)["ok"])
+        self.rejected(type="use_item", item="stew")                                # the narrator's own slip is still refused
+
     def test_what_is_worn_can_fall_off_be_lost_or_handed_over(self):
         self.ok(type="unequip", item="Travel Cloak")                              # named by the item, not the slot
         self.assertEqual((self.me["equipment"].get("body"), self.me["inventory"]["travel_cloak"]), (None, 1))
