@@ -204,9 +204,9 @@
           "name": { "type": "string" },
           "description": { "type": "string", "description": "What it means, for the narrator." },
           "blocks": {
-            "description": "What a character in this state cannot do. For the player the engine enforces it.",
+            "description": "What a character in this state cannot do. For the player the engine refuses the game actions (move, items, equipment, skills, trade, attack; all means every one of those). speech, sight and hearing are no game action: the narrator is told each turn to tell the story that way (the gagged are heard as muffled noise), and all does not include them, so name them as well where they apply.",
             "type": "array",
-            "items": { "enum": ["all", "move", "items", "equipment", "skills", "trade", "attack"] }
+            "items": { "enum": ["all", "move", "items", "equipment", "skills", "trade", "attack", "speech", "sight", "hearing"] }
           },
           "away": { "type": "boolean", "default": false, "description": "The character is out of the scene: not shown, and cannot be given things or targeted." }
         }

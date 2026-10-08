@@ -4,7 +4,7 @@
 
 const SLOTS = ["head", "body", "hands", "feet", "weapon", "offhand", "accessory"];
 const FEATURE_DEFAULTS = { inventory: true, equipment: true, money: true, levels: false, skills: false, relationships: false, states: false };
-const CAPABILITY_NAMES = { all: "Everything", move: "Moving between places", items: "Using or giving items", equipment: "Changing equipment", skills: "Using skills", trade: "Buying and selling", attack: "Attacking" };
+const CAPABILITY_NAMES = { all: "Every action", move: "Moving between places", items: "Using or giving items", equipment: "Changing equipment", skills: "Using skills", trade: "Buying and selling", attack: "Attacking", speech: "Speaking (heard as muffled noise)", sight: "Seeing", hearing: "Hearing" };
 
 const app = document.getElementById("app");
 let pid = null;          // folder name of the open card
@@ -622,9 +622,9 @@ const SECTIONS = [
   { id: "states", title: "States", when: () => has("states"), count: () => (card.states || []).length, intro: "Conditions a character can be in. The AI sets and clears them as the story goes; the game stops the player doing what their state blocks.", fields: () => [
     { t: "custom", render: () => el("div", { class: "notice" }, el("p", {}, "Every card already has these: ",
       builtinStates.map((b, n) => [n ? ", " : "", el("b", {}, b.name)]), ". Add your own below. A state with the same id as a built-in one replaces it."),
-      el("p", { class: "small muted", text: "The AI may also invent states you did not list, such as \"tipsy\". Those are remembered and shown but stop nothing." })) },
+      el("p", { class: "small muted", text: "The AI may also invent states you did not list, such as \"tipsy\". Those are remembered and shown, and stop only what the AI says they stop when it sets them." })) },
     { t: "list", k: "states", add: "Add a state", make: () => ({ id: "", name: "", blocks: [] }), title: (s) => s.name,
-      sub: (s) => ((s.blocks || []).includes("all") ? "stops everything" : (s.blocks || []).length ? "stops " + s.blocks.join(", ") : "stops nothing") + (s.away ? ", out of the scene" : ""), fields: [
+      sub: (s) => ((s.blocks || []).includes("all") ? "stops every action" : (s.blocks || []).length ? "stops " + s.blocks.join(", ") : "stops nothing") + (s.away ? ", out of the scene" : ""), fields: [
         { t: "text", k: "name", label: "Name", feeds: "id" },
         { t: "text", k: "id", label: "Id" },
         { t: "area", k: "description", label: "What it means", rows: 2, help: "The AI reads this to know when the state applies." },

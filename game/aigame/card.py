@@ -38,12 +38,16 @@ FEATURES = {
 }
 
 # Things a state can stop a character doing. "all" stands for every one of them.
-CAPABILITIES = ("move", "items", "equipment", "skills", "trade", "attack")
+CAPABILITIES = ("move", "items", "equipment", "skills", "trade", "attack", "speech", "sight", "hearing")
+# These three are no action the game could refuse. A state that stops one changes how the story is
+# told instead: the gagged are heard as muffled noise. "all" means every action and leaves them out,
+# so someone tied up can still talk.
+SENSES = ("speech", "sight", "hearing")
 
 # States every card has when states are on. A card can redefine these by id and add its own.
 BUILTIN_STATES = (
-    {"id": "asleep", "name": "Asleep", "description": "Sleeping. Unaware of the scene until woken.", "blocks": ["all"]},
-    {"id": "unconscious", "name": "Unconscious", "description": "Knocked out. Cannot be woken by ordinary means.", "blocks": ["all"]},
+    {"id": "asleep", "name": "Asleep", "description": "Sleeping. Unaware of the scene until woken.", "blocks": ["all", "speech", "sight", "hearing"]},
+    {"id": "unconscious", "name": "Unconscious", "description": "Knocked out. Cannot be woken by ordinary means.", "blocks": ["all", "speech", "sight", "hearing"]},
     {"id": "restrained", "name": "Restrained", "description": "Tied up, held or locked in. Can still talk.", "blocks": ["all"]},
     {"id": "away", "name": "Away", "description": "Gone for a while. Not in the scene and cannot be spoken to.", "blocks": ["all"], "away": True},
 )

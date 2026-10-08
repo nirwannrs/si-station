@@ -7,7 +7,7 @@ plain factual sentences because they are fed back to the narrator.
 
 import re
 
-from .card import PLAYER, SLOTS
+from .card import CAPABILITIES, PLAYER, SLOTS
 from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
 from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, stat_min, state_name, together, xp_needed
 
@@ -785,11 +785,17 @@ def _set_state(card, state, a):
     ref = a.get("state")
     if not isinstance(ref, str) or not ref.strip() or len(ref) > 40:
         raise Rejected("A state needs a short name.")
+    stops = None
     try:
         sid, known = _find(card.states, ref, "state")
     except Rejected:
-        # A state the card never defined is still worth remembering; it just stops nothing.
+        # A state the card never defined is still worth remembering. It stops what the story says
+        # it stops, and nothing when the story does not say.
         sid = "".join(c if c.isalnum() else "_" for c in ref.strip().lower()).strip("_") or "state"
+        if isinstance(a.get("stops"), list):
+            stops = [what for what in ("all",) + CAPABILITIES if what in a["stops"]]
+        elif sid in who["states"]:
+            stops = who["states"][sid].get("stops")
     note = a.get("note") if isinstance(a.get("note"), str) else ""
     if sid in who["states"] and _says_it_ended(who["states"][sid]["name"], note):
         # Some models "update" a state to say it has ended instead of clearing it. Take it as meant:
@@ -797,6 +803,8 @@ def _set_state(card, state, a):
         name = who["states"].pop(sid)["name"]
         return "%s is no longer %s." % (who["name"], name.lower())
     who["states"][sid] = {"name": state_name(card, sid), "note": note.strip()[:200]}
+    if stops:
+        who["states"][sid]["stops"] = stops
     return "%s is now %s%s." % (who["name"], who["states"][sid]["name"].lower(), " (%s)" % who["states"][sid]["note"] if note.strip() else "")
 
 

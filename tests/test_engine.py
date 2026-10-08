@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 from aigame import battle, prompt  # noqa: E402
 from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
 from aigame.card import Card, CardError, check_card, import_card, list_cards, load_card, pack_card  # noqa: E402
-from aigame.state import describe_states, effective_stat, new_game, reconcile  # noqa: E402
+from aigame.state import describe_states, effective_stat, limits, new_game, reconcile  # noqa: E402
 
 CARD_DIR = os.path.join(ROOT, "cards", "rusty_lantern")
 
@@ -232,6 +232,25 @@ class EngineTest(unittest.TestCase):
         self.card.data["rules"].setdefault("features", {})["equipment"] = False
         self.ok(type="create_item", name="Tin Ring", slot="accessory")
         self.assertEqual(self.state["generated_items"]["gen_tin_ring"]["type"], "misc")
+
+    def test_a_state_the_story_made_up_stops_what_the_story_says(self):
+        self.ok(type="set_state", state="grieving")
+        self.assertNotIn("stops", self.me["states"]["grieving"])
+        self.ok(type="set_state", state="Hands bound", note="rope at the wrists", stops=["items", "equipment", "attack"])
+        self.assertEqual(limits(self.card, self.me), [("items", "Hands bound"), ("equipment", "Hands bound"), ("attack", "Hands bound")])
+        held = apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)
+        self.assertEqual((held["ok"], held["message"]), (False, "Traveler cannot do that while hands bound."))
+        self.assertTrue(apply_action(self.card, self.state, {"type": "move", "location": "stable"}, by_player=True)["ok"])   # not their legs
+        self.ok(type="set_state", state="hands bound", note="the knots pulled tighter")              # said again without stops: it still holds
+        self.assertEqual(self.me["states"]["hands_bound"]["stops"], ["items", "equipment", "attack"])
+        self.ok(type="set_state", state="restrained", stops=["speech"])                             # the card's own state keeps the card's rules
+        self.assertNotIn("stops", self.me["states"]["restrained"])
+        self.assertEqual(limits(self.card, self.me), [("all", "Restrained")])
+        self.ok(type="clear_state", state="restrained")
+        self.ok(type="clear_state", state="hands bound")
+        self.assertTrue(apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)["ok"])
+        self.ok(type="set_state", state="asleep")
+        self.assertEqual([what for what, name in limits(self.card, self.me)], ["all", "speech", "sight", "hearing"])
 
     def test_what_is_worn_can_fall_off_be_lost_or_handed_over(self):
         self.ok(type="unequip", item="Travel Cloak")                              # named by the item, not the slot

@@ -302,8 +302,16 @@ class StatesPromptTest(unittest.TestCase):
         self.assertNotIn("Characters here", text)
         self.assertIn("Mira Oakhand: Innkeeper", prompt.describe_cast(card))
         protocol = prompt.action_protocol(card)
-        for part in ["set_state", "clear_state", "[States]", "Restrained (restrained)", "stops them doing anything", "they are out of the scene"]:
+        for part in ["set_state", "clear_state", "[States]", "Restrained (restrained)", "stops every action", "they are out of the scene", '"stops": [...]']:
             self.assertIn(part, protocol)
+        self.assertIn("So they cannot act: nothing they try to do gets done (restrained).", text)
+        self.assertNotIn("cannot speak", text)                                                      # tied up, and can still talk
+        apply_actions(card, state, [{"type": "set_state", "state": "Mouth shut", "note": "sealed by a spell", "stops": ["speech", "flying"]},
+                                    {"type": "set_state", "who": "tobin", "state": "blindfolded", "stops": ["sight"]}])
+        text = prompt.describe_state(card, state)
+        self.assertIn("cannot speak: whatever they try to say comes out as muffled or wordless sound, and nobody makes out the words (mouth shut)", text)
+        self.assertIn("tell the attempt and how it fails, never the thing done", text)
+        self.assertEqual(state["actors"]["player"]["states"]["mouth_shut"]["stops"], ["speech"])    # what is not a real limit is dropped
         self.assertNotIn("set_state", prompt.resolver_prompt(card, state, "I break free")[0])       # the player cannot free themselves by saying so
         self.assertEqual(prompt.parse_resolver('{"actions": [{"type": "clear_state", "state": "restrained"}]}', card), [])
 

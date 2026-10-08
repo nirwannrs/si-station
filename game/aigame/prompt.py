@@ -13,7 +13,7 @@ from .llm import extract_json
 from . import journal
 from .text import keep_marks_paired
 from .wording import prompt_text
-from .state import available_quests, cast_in_play, named_in, describe_states, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
+from .state import available_quests, cast_in_play, named_in, describe_states, limits, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -80,7 +80,7 @@ NARRATOR_ACTIONS = (
     ("skills", '{"type": "use_skill", "who": CHARACTER_ID, "skill": SKILL_ID, "target": WHO}  a character other than the player uses one of their skills'),
     ("skills", '{"type": "unlock_skill", "who": WHO, "skill": SKILL_ID}  someone learns a skill through the story'),
     ("levels", '{"type": "gain_xp", "who": WHO, "amount": N}  experience for something achieved: about 10 for a small success, 30 for a real fight or a clever solution, 100 for a major victory'),
-    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state, as [States] describes one: falls asleep, is taken prisoner, sinks into grief. state is an id from that list, or a short name of your own for another lasting condition. The note says how it came about or who caused it, in a few words'),
+    ("states", '{"type": "set_state", "who": WHO, "state": STATE_ID, "note": "..."}  someone enters a state, as [States] describes one: falls asleep, is taken prisoner, sinks into grief. state is an id from that list, or a short name of your own for another lasting condition. The note says how it came about or who caused it, in a few words. With a name of your own, add "stops": [...] when the condition keeps them from something: any of speech, sight, hearing, move, items, equipment, skills, trade, attack, or all for every action (gagged stops speech, blindfolded stops sight, hands bound stops items, equipment and attack). Leave it out for a condition that stops nothing'),
     ("states", '{"type": "clear_state", "who": WHO, "state": STATE_ID}  the state ends: they wake, break free, come back'),
     ("relationships", '{"type": "change_relationship", "who": CHARACTER_ID, "amount": N}  how that character feels about the player shifts: usually -5 to +5, up to 15 for a moment that truly matters'),
     ("battle", '{"type": "start_battle", "enemies": [CHARACTER_ID, ...]}  a fight breaks out with these characters. The game then runs the fight itself, blow by blow, so end your reply at the moment it starts: do not narrate blows, damage or who wins'),
@@ -122,7 +122,8 @@ def states_reference(card, record=True):
     lines = []
     for state in sorted(card.states.values(), key=lambda s: s["id"]):
         blocks = state.get("blocks", [])
-        stops = "stops them doing anything" if "all" in blocks else "stops: " + ", ".join(blocks) if blocks else "stops nothing"
+        rest = [b for b in blocks if b != "all"]
+        stops = ("stops every action" + (" and " + ", ".join(rest) if rest else "")) if "all" in blocks else "stops: " + ", ".join(blocks) if blocks else "stops nothing"
         lines.append("- %s. %s (%s%s)" % (_named(state), state.get("description", ""), stops, "; they are out of the scene" if state.get("away") else ""))
     ## A name of the model's own stops nothing, so someone "kidnapped" under one would still be standing in the room.
     leaving = [_named(state) for state in sorted(card.states.values(), key=lambda s: s["id"]) if state.get("away")]
@@ -136,7 +137,7 @@ def states_reference(card, record=True):
 Each character's current states are in the game state. %s A character who is out of the scene cannot speak or act in it.
 These states have rules in this game:
 %s
-Any other lasting condition can be a state as well, under a short name of two or three words ("grieving", "in disguise"). It stops nothing, but it is remembered.%s""" % (
+Any other lasting condition can be a state as well, under a short name of two or three words ("grieving", "in disguise"). It stops what you say it stops when you set it, nothing otherwise, and it is remembered.%s""" % (
         STATE_MEANING, duty, "\n".join(lines), gone)
 
 
@@ -386,6 +387,32 @@ def _skills(card, actor):
     return ", ".join(parts) or "none"
 
 
+# What each thing a state can stop means for the telling. The engine refuses the player's own game
+# actions; the rest (and all of it for other characters) only holds if the story is told that way.
+LIMIT_MEANS = {
+    "all": "cannot act: nothing they try to do gets done",
+    "move": "cannot go anywhere: trying is a struggle that leaves them where they are",
+    "items": "cannot use or hand over what they carry",
+    "equipment": "cannot put on or take off what they wear",
+    "skills": "cannot use skills: an attempt comes to nothing",
+    "trade": "cannot buy or sell",
+    "attack": "cannot strike anyone",
+    "speech": "cannot speak: whatever they try to say comes out as muffled or wordless sound, and nobody makes out the words",
+    "sight": "cannot see: they know only what they hear, feel, smell or are told",
+    "hearing": "cannot hear: what is said near them does not reach them as words",
+}
+
+
+def _state_parts(card, actor):
+    """The states someone is in and, in plain words, what those states keep them from."""
+    parts = ["State: %s" % describe_states(actor)]
+    held = limits(card, actor)
+    if held:
+        parts.append("So they %s. When they try any of it, tell the attempt and how it fails, never the thing done" % "; ".join(
+            "%s (%s)" % (LIMIT_MEANS[what], name.lower()) for what, name in held))
+    return parts
+
+
 def _sheet(card, state, who):
     """The tracked facts about one actor, limited to the systems the card uses."""
     actor = state["actors"][who]
@@ -403,7 +430,7 @@ def _sheet(card, state, who):
     if uses(card, "skills"):
         parts.append("Skills: %s" % _skills(card, actor))
     if uses(card, "states") and actor.get("states"):
-        parts.append("State: %s" % describe_states(actor))
+        parts.extend(_state_parts(card, actor))
     if uses(card, "relationships") and who != PLAYER:
         parts.append("%s toward the player: %s/100" % (card.relationship_name, _fmt(actor["relationship"])))
     return parts
@@ -579,7 +606,7 @@ def _brief(card, state, who):
         top = stat_max(card, actor, health)
         parts.append("%s %s%s" % (stat["name"], _fmt(effective_stat(card, state, who, health)), "/%s" % _fmt(top) if top is not None else ""))
     if uses(card, "states") and actor.get("states"):
-        parts.append("State: %s" % describe_states(actor))
+        parts.extend(_state_parts(card, actor))
     if uses(card, "relationships"):
         parts.append("%s toward the player: %s/100" % (card.relationship_name, _fmt(actor["relationship"])))
     return parts

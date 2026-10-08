@@ -320,7 +320,12 @@
               "type": { "const": "set_state" },
               "who": { "$ref": "#/$defs/who" },
               "state": { "type": "string" },
-              "note": { "type": "string" }
+              "note": { "type": "string" },
+              "stops": {
+                "description": "Only for a state the card does not define: what it keeps the character from, as a card state's blocks would. Ignored for a card state, whose blocks stand.",
+                "type": "array",
+                "items": { "enum": ["all", "move", "items", "equipment", "skills", "trade", "attack", "speech", "sight", "hearing"] }
+              }
             }
           },
           {

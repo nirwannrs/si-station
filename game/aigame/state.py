@@ -5,7 +5,7 @@ can be deep-copied for undo. The card itself is never stored in it.
 """
 
 import re
-from .card import PLAYER
+from .card import CAPABILITIES, PLAYER, SENSES
 
 
 def _new_actor(card, name, start, location):
@@ -53,15 +53,35 @@ def state_name(card, state_id):
     return known["name"] if known else state_id.replace("_", " ").capitalize()
 
 
+def _stops(card, state_id, held):
+    """What one state stops: the card's word on a state it defines, else what the story said the
+    state stops when it made it up."""
+    known = card.states.get(state_id)
+    return known.get("blocks", []) if known else held.get("stops", [])
+
+
 def blocked(card, actor, capability):
-    """The name of a state that stops the actor doing this, or None. States the card does not define block nothing."""
+    """The name of a state that stops the actor doing this, or None."""
     if not card.has("states"):
         return None
     for state_id, held in sorted(actor.get("states", {}).items()):
-        blocks = card.states.get(state_id, {}).get("blocks", [])
-        if "all" in blocks or capability in blocks:
+        blocks = _stops(card, state_id, held)
+        if capability in blocks or ("all" in blocks and capability not in SENSES):
             return held["name"]
     return None
+
+
+def limits(card, actor):
+    """Everything the actor's states stop, as (what, name of the state), in a steady order. "all"
+    stands for every action, and the single actions it covers are then left out."""
+    if not card.has("states"):
+        return []
+    found = {}
+    for state_id, held in sorted(actor.get("states", {}).items()):
+        for what in _stops(card, state_id, held):
+            found.setdefault(what, held["name"])
+    order = ("all",) + (SENSES if "all" in found else CAPABILITIES)
+    return [(what, found[what]) for what in order if what in found]
 
 
 def is_away(card, actor):
