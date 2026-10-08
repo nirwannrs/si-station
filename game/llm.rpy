@@ -827,6 +827,8 @@ init python:
                 attempts = aig_prompt.parse_resolver(once("attempts", lambda: run_helper_sure(
                     "resolve_actions", aig_prompt.resolver_prompt(card, state, text, prompts=preset["prompts"]), "actions")), card)
             results = state["pending_results"] + aig_actions.apply_actions(card, state, attempts, by_player=True)
+            ## Gagged, blinded or deafened: the story model is told how the player's message lands.
+            results = results + aig_prompt.sense_notes(card, state)
 
             ## Whoever the player just named, or the last reply did, enters the story with this turn. The
             ## story model is told who they are in this turn's message, which is kept as it was sent.

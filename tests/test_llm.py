@@ -312,6 +312,15 @@ class StatesPromptTest(unittest.TestCase):
         self.assertIn("cannot speak: whatever they try to say comes out as muffled or wordless sound, and nobody makes out the words (mouth shut)", text)
         self.assertIn("tell the attempt and how it fails, never the thing done", text)
         self.assertEqual(state["actors"]["player"]["states"]["mouth_shut"]["stops"], ["speech"])    # what is not a real limit is dropped
+        notes = prompt.sense_notes(card, state)                                                     # how the player's own message lands this turn
+        self.assertEqual([n["ok"] for n in notes], [None])
+        for part in ["cannot speak (mouth shut)", "what they meant, not what anyone heard", "a guess can be wrong", "never the wording"]:
+            self.assertIn(part, notes[0]["message"])
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            sent = prompt.narrator_prompt(card, state, json.load(f), 'I shout "Run, Mira!"', notes)[1][-1]["content"]
+        self.assertIn("UP TO YOU: %s cannot speak" % state["actors"]["player"]["name"], sent)
+        apply_actions(card, state, [{"type": "clear_state", "state": "mouth shut"}])
+        self.assertEqual(prompt.sense_notes(card, state), [])
         self.assertNotIn("set_state", prompt.resolver_prompt(card, state, "I break free")[0])       # the player cannot free themselves by saying so
         self.assertEqual(prompt.parse_resolver('{"actions": [{"type": "clear_state", "state": "restrained"}]}', card), [])
 

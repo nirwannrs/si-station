@@ -403,6 +403,31 @@ LIMIT_MEANS = {
 }
 
 
+# What the player types is what their character means to say and do. When a state has taken their
+# voice, sight or hearing, the story model still reads every word of it, and left alone it has the
+# others answer those words. So the turn's message carries a note saying how the message lands.
+SENSE_NOTES = {
+    "speech": "%(name)s cannot speak (%(state)s). Anything they say in this message is what they meant, not what anyone heard: it left them as muffled or wordless sound. "
+              "The others answer only what reached them: the noise and its tone, a look, a gesture, what is going on around them. They ask what was meant or they guess, and a guess can be wrong. "
+              "Someone grasps the meaning only where there is a real reason: a power that carries thoughts, a sign the two agreed on, or knowing %(name)s well enough to read them (long company%(bond)s), "
+              "and even then they get the gist, never the wording. How much each person understands is yours to decide by who they are; nobody answers the words as though they had been heard.",
+    "sight": "%(name)s cannot see (%(state)s). Tell this turn to them through what they hear, feel, smell and are told. They do not know what anything looks like, who has come in silently, or what is done out of their reach, "
+             "and whatever in their message depends on seeing is a guess or a grope that may go wrong.",
+    "hearing": "%(name)s cannot hear (%(state)s). What others say does not reach them as words: tell it as it looks (lips moving, faces, gestures) and let them learn what was said only if it is shown, written, signed or reaches them some other way. "
+               "Whatever in their message answers something said aloud is them guessing.",
+}
+
+
+def sense_notes(card, state):
+    """Notes for this turn's message on how it lands, one for each of speech, sight and hearing that
+    the player's states have taken. They travel with the engine results as things left to the story
+    (ok is None), so the player is not shown them and the turn is kept as it was sent."""
+    me = state["actors"][PLAYER]
+    bond = ", or a high %s toward them" % card.relationship_name if uses(card, "relationships") else ""
+    return [{"action": None, "ok": None, "message": SENSE_NOTES[what] % {"name": me["name"], "state": name.lower(), "bond": bond}}
+            for what, name in limits(card, me) if what in SENSE_NOTES]
+
+
 def _state_parts(card, actor):
     """The states someone is in and, in plain words, what those states keep them from."""
     parts = ["State: %s" % describe_states(actor)]
