@@ -299,6 +299,47 @@ class PromptFollowsFeaturesTest(unittest.TestCase):
         self.assertNotIn("<actions>", system + messages[-1]["content"])
 
 
+class CastTest(unittest.TestCase):
+    """Everyone who has entered the story keeps one line, sent every turn. The rest of what the
+    card says of someone is sent only while they are in play."""
+
+    def setUp(self):
+        self.card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        self.state = new_game(self.card)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            self.preset = json.load(f)
+
+    def sent(self, said, **more):
+        system, messages = prompt.narrator_prompt(self.card, self.state, dict(self.preset, **more), said, [])
+        return system, messages[-1]["content"]
+
+    def test_only_those_in_play_are_described_in_full(self):
+        mira, tobin = self.card.characters["mira"], self.card.characters["tobin"]
+        self.assertEqual(prompt.in_focus(self.card, self.state, "I wait."), ["mira"])                       # she is with the player
+        self.assertEqual(prompt.in_focus(self.card, self.state, "Where is Tobin?"), ["tobin", "mira"])      # he is spoken of: first
+        self.assertEqual(prompt.in_focus(self.card, self.state, "I wait.", recent="Tobin left."), ["mira", "tobin"])
+        system, tail = self.sent("I wait.")
+        self.assertIn("[Who is in play]\nMira Oakhand (mira)\nPersonality: %s" % mira["personality"], tail)
+        self.assertNotIn(tobin["personality"], system + tail)
+        self.assertNotIn(mira["personality"], system)
+        self.state["cast"] = ["mira", "tobin"]
+        self.state["history"] = [{"player": "x", "results": [], "narration": "y"}]
+        self.state["summarized"] = 1                                                                         # the turns they entered in have left the prompt
+        system, tail = self.sent("I wait.")
+        self.assertIn("Mira Oakhand: %s\nTobin: %s" % (mira["description"], tobin["description"]), system)     # one line each, always
+        self.assertNotIn(tobin["personality"], system + tail)
+
+    def test_a_crowd_does_not_flood_the_prompt(self):
+        for who in self.card.characters:
+            self.state["actors"][who]["location"] = self.state["actors"]["player"]["location"]
+            self.card.characters[who]["ai_notes"] = "n" * 5000
+        chosen = prompt.in_focus(self.card, self.state, "I wait.")
+        self.assertEqual(len(chosen), 2)                                                                     # as many as fit
+        self.assertLessEqual(sum(len(self.card.characters[c]["ai_notes"]) for c in chosen), prompt.CAST_ROOM)
+        blocks = [dict(b, enabled=False) if b.get("slot") == "characters" else b for b in self.preset["blocks"]]
+        self.assertNotIn("[Who is in play]", self.sent("I wait.", blocks=blocks)[1])                         # a preset that leaves people out leaves them out
+
+
 class ClockTest(unittest.TestCase):
     """The story model writes the time and place line; the game reads it, tells the story the hour
     in plain words, and has the timekeeper put the line right when it cannot be right."""

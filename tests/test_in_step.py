@@ -280,8 +280,13 @@ class ForTheModelOnlyTest(unittest.TestCase):
         from aigame.state import new_game
         sample = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
         state = new_game(sample)
-        system = prompt.narrator_prompt(sample, state, json.loads(read("presets", "default.preset.json")), "I wait.", [], record=False)[0]
-        self.assertIn("Notes for the narrator: Saw the courier's horse come back without a rider", system)
+        preset = json.loads(read("presets", "default.preset.json"))
+        note = "Notes for the narrator: Saw the courier's horse come back without a rider"
+        system, messages = prompt.narrator_prompt(sample, state, preset, "I go and find Tobin.", [], record=False)
+        self.assertIn(note, messages[-1]["content"])                # he is in play this turn: all the card says of him is sent
+        self.assertNotIn(note, system)
+        system, messages = prompt.narrator_prompt(sample, state, preset, "I wait.", [], record=False)
+        self.assertNotIn(note, system + messages[-1]["content"])    # he is elsewhere and nobody speaks of him: his one line is enough
         self.assertIn("ai_notes", CARD_SCHEMA["properties"]["characters"]["items"]["properties"])
         self.assertIn('k: "ai_notes"', read("creator", "static", "app.js"))
         for name in os.listdir(os.path.join(ROOT, "game")):

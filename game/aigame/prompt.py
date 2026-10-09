@@ -786,24 +786,64 @@ def arrivals(card, state, player_text):
 
 
 def _entering(card, ids):
-    text = describe_cast(card, ids, heading="[Entering the story]") if ids else ""
+    text = describe_cast(card, ids, heading="[Entering the story]", full=False) if ids else ""
     return text + "\n\n" if text else ""
 
 
-def describe_cast(card, cast=None, heading="[Characters]"):
+# Who the characters are is told in two parts, the way the journal tells what happened. Everyone
+# who has entered the story keeps one line, sent every turn in a list that only grows at its end.
+# The rest of what the card says of a person (how they are, look and talk, and the author's notes,
+# which is most of it) is sent only for those in play this turn. A story gathers people as it
+# goes; describing every one of them in full on every turn was the heaviest thing in the prompt.
+CAST_ROOM = 12000       # the most characters of full descriptions sent in one turn
+
+_SHEET = (("Personality", "personality"), ("Appearance", "appearance"), ("How they talk", "dialogue_examples"), ("Notes for the narrator", "ai_notes"))
+
+
+def describe_cast(card, cast=None, heading="[Characters]", full=True):
     """Who the characters are. cast is the ids of those who have entered the story, in the order
     they did; only they are described, in that order, so the text only ever grows at its end.
-    Left out, everyone in the card is described."""
+    Left out, everyone in the card is described. full is whether to give all the card says of
+    each, or only the line they are known by."""
     lines = []
     chosen = card.data.get("characters", []) if cast is None else [card.characters[c] for c in cast if c in card.characters]
     for c in chosen:
         parts = ["%s: %s" % (c["name"], c["description"])]
         ## ai_notes is for the model alone; the game never shows it to the player.
-        for label, key in (("Personality", "personality"), ("Appearance", "appearance"), ("How they talk", "dialogue_examples"), ("Notes for the narrator", "ai_notes")):
+        for label, key in _SHEET if full else ():
             if c.get(key):
                 parts.append("%s: %s" % (label, c[key]))
         lines.append("\n".join(parts))
-    return heading + "\n" + "\n\n".join(lines) if lines else ""
+    return heading + "\n" + ("\n\n" if full else "\n").join(lines) if lines else ""
+
+
+def in_focus(card, state, in_play, recent=""):
+    """The characters to describe in full this turn, most called for first: those the text in play
+    names (what the player typed, what the story just said), then whoever else is with the
+    player, then those only the last few turns named. As many as fit in CAST_ROOM."""
+    me = state["actors"][PLAYER]
+    here = [who for who, actor in sorted(state["actors"].items())
+            if who != PLAYER and who in card.characters and actor["location"] is not None and actor["location"] == me["location"] and not is_away(card, actor)]
+    wanted = []
+    for who in named_in(card, in_play) + here + named_in(card, recent):
+        if who in card.characters and who not in wanted:
+            wanted.append(who)
+    chosen, room = [], CAST_ROOM
+    for who in wanted:
+        size = sum(len(card.characters[who].get(key) or "") for label, key in _SHEET)
+        if size and (size <= room or not chosen):
+            chosen.append(who)
+            room -= size
+    return chosen
+
+
+def describe_focus(card, state, in_play, recent=""):
+    """The full descriptions of those in play this turn, for the newest message."""
+    people = []
+    for who in in_focus(card, state, in_play, recent):
+        c = card.characters[who]
+        people.append("\n".join(["%s (%s)" % (c["name"], who)] + ["%s: %s" % (label, c[key]) for label, key in _SHEET if c.get(key)]))
+    return "[Who is in play]\n" + "\n\n".join(people) if people else ""
 
 
 def describe_lore(card, recent_text):
@@ -874,6 +914,8 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
     entering = arrivals(card, state, player_text)
     live = state["history"][state.get("summarized", 0):]
     settled = [c for c in cast if c not in entering and not any(c in turn.get("cast", ()) for turn in live)]
+    ## A preset that leaves the characters out leaves them out in both parts.
+    people_on = any(block.get("kind") == "slot" and block.get("slot") == "characters" and block.get("enabled", True) for block in preset["blocks"])
     slots = {
         "world": lambda: "[World]\n%s%s" % (world["description"], "\n\n[Situation at the start]\n" + world["scenario"] if world.get("scenario") else ""),
         ## The card's own guidance is told apart from the preset's and given the last word. See wording.py.
@@ -881,9 +923,11 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         "persona": lambda: "[The player's character]\nName: %s%s%s" % (
             me["name"], "\n" + me["description"] if me.get("description") else "",
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
-        "characters": lambda: describe_cast(card, settled),
+        "characters": lambda: describe_cast(card, settled, heading="[Characters]\nEveryone who has entered the story, in a line each. Whoever is in play this turn is described in full with the scene.", full=False),
         "lorebook": lambda: describe_lore(card, _recent_text(card, state, player_text)),
-        "state": lambda: describe_scene(card, state, knowledge=True, hour=header) + "\n\n" + describe_state(card, state, focus=in_play, cast=cast, items=record),
+        "state": lambda: "\n\n".join(part for part in (describe_focus(card, state, in_play, _recent_text(card, state, "")) if people_on else "",
+                                                      describe_scene(card, state, knowledge=True, hour=header),
+                                                      describe_state(card, state, focus=in_play, cast=cast, items=record)) if part),
         "quests": lambda: describe_quests(card, state),
         ## The short running summary of everything that has left the prompt, then the journal entries that matter this turn.
         "summary": lambda: "\n\n".join(part for part in ("[Story so far]\n" + state["summary"] if state["summary"] else "",
