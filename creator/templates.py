@@ -17,6 +17,7 @@ RULES = {
         "stats": [],
         "features": {"inventory": False, "equipment": False, "money": False, "levels": False, "skills": False, "relationships": True, "states": True},
         "relationship_name": "Affection",
+        "allow_generated_quests": False,        # a quiet story with nothing to track does not need tasks handed out
     },
     "rpg": {
         "stats": RPG_STATS,

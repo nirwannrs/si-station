@@ -126,6 +126,11 @@
           "default": true,
           "description": "If true the story may take characters to places the card does not define; such a place is created during play with a name and description, and has no connections unless the story gives it one. If false the map is fixed to the card's locations."
         },
+        "allow_generated_quests": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true the story may give the player quests the card does not define: something taken on in play, with one objective, optionally part of one of the card's quests (it ends with it) and optionally due by a time. If false only the card's quests exist."
+        },
         "allow_generated_items": {
           "type": "boolean",
           "default": true,

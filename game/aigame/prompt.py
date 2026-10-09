@@ -13,7 +13,7 @@ from .llm import extract_json
 from . import clock, journal
 from .text import keep_marks_paired, muffled
 from .wording import prompt_text
-from .state import available_quests, cast_in_play, named_in, describe_states, limits, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, stat_max, xp_needed
+from .state import available_quests, cast_in_play, named_in, describe_states, limits, effective_stat, game_checked, get_item, is_away, knows_place, place_list, places, quest_list, quests, stat_max, xp_needed
 
 # name -> label shown in the Models screen. Adding a helper job means adding it here, plus its
 # prompt builder and reply parser below.
@@ -37,8 +37,12 @@ HELPER_TASKS = (
 def uses(card, need):
     if need == "shops":
         return bool(card.shops) and card.has("money") and card.has("inventory")
-    if need in ("map", "quests", "stats"):
-        return bool({"map": card.locations, "quests": card.quests, "stats": card.stats}[need])
+    if need == "quests":
+        return bool(card.quests) or card.allow_generated_quests
+    if need == "new_quests":
+        return card.allow_generated_quests
+    if need in ("map", "stats"):
+        return bool({"map": card.locations, "stats": card.stats}[need])
     if need == "battle":
         return card.battle_system
     if need == "new_places":
@@ -90,6 +94,8 @@ NARRATOR_ACTIONS = (
     ("quests", '{"type": "quest_start", "quest": QUEST_ID}'),
     ("quests", '{"type": "quest_advance", "quest": QUEST_ID, "stage": OBJECTIVE_ID}  the quest\'s current objective, named by its id, is now completely finished: every part of it has happened and is over. Never for an objective that has only begun or is going well'),
     ("quests", '{"type": "quest_fail", "quest": QUEST_ID}'),
+    ("quests", '{"type": "quest_overdue", "quest": QUEST_ID}  the time a quest was due by has passed and it is not done'),
+    ("new_quests", '{"type": "create_quest", "title": "...", "description": "...", "parent": QUEST_ID, "due": "...", "late": "fails" or "stands"}  {{user}} has taken something on that is not among the quests: a favour asked, a promise made, an errand. description says who asked, what for and when it was agreed, enough to pick it up again much later. parent is the quest it is part of, if any; it ends when that quest does. due is when it must be done by, with the day and hour where the story gives them, and late says whether missing that fails it or leaves it standing, marked late. Leave out what does not apply'),
 )
 
 TRACKED = (("battle", "fights"), ("states", "the state each character is in"), ("inventory", "inventory"), ("equipment", "equipment"), ("money", "money"), ("stats", "stats"),
@@ -221,16 +227,30 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
 
 # The quest judge: a helper whose only job is to decide whether quests have moved on.
 
+def _task_terms(card, state, quest, progress):
+    """What only a quest the story made has, as lines under it: that it is the story's, what it is
+    part of, and when it is due."""
+    if not quest.get("generated"):
+        return ""
+    lines = ["Taken on in the story."]
+    if quest.get("parent") in quests(card, state):
+        lines.append("Part of %s; it ends when that quest does." % quests(card, state)[quest["parent"]]["title"])
+    if quest.get("due"):
+        lines.append("Due: %s. %s" % (quest["due"], "The time has passed; it can still be done." if progress.get("overdue") else
+                                      "If that passes it fails." if quest.get("late") == "fails" else "If that passes it is late, and can still be done."))
+    return "".join("\n  " + line for line in lines)
+
+
 def judge_prompt(card, state, player_text, narration, turns=5, prompts=None):
     system = prompt_text(prompts, "judge_quests")
     active = []
     waiting = ["- %s: %s" % (_named(quest, "title"), quest.get("description", "")) for quest in available_quests(card, state)]
-    for quest in card.data.get("quests", []):
+    for quest in quest_list(card, state):
         progress = state["quests"].get(quest["id"])
         if progress is not None and progress["status"] == "active":
             stage = quest["stages"][progress["stage"]]
-            entry = "- %s. Current objective [%s], part %d of %d: %s" % (
-                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
+            entry = "- %s. Current objective [%s], part %d of %d: %s%s" % (
+                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"], _task_terms(card, state, quest, progress))
             if game_checked(card, stage):
                 entry += "\n  The game itself marks this objective finished. Answer not_yet for it, unless the quest has failed."
             else:
@@ -244,18 +264,21 @@ def judge_prompt(card, state, player_text, narration, turns=5, prompts=None):
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 
-def parse_judge(text, card):
+def parse_judge(text, card, state=None):
     """The judge's verdicts as actions. Each names the objective it judged, which the engine checks
     against the quest's real current objective, so a verdict about the wrong one changes nothing."""
     parsed = extract_json(text) or {}
     actions = []
+    known = quests(card, state) if state is not None else card.quests
     for verdict in parsed.get("verdicts") if isinstance(parsed.get("verdicts"), list) else []:
-        if not isinstance(verdict, dict) or not isinstance(verdict.get("quest"), str) or verdict["quest"] not in card.quests:
+        if not isinstance(verdict, dict) or not isinstance(verdict.get("quest"), str) or verdict["quest"] not in known:
             continue
         if verdict.get("verdict") == "done" and isinstance(verdict.get("objective"), str):
             actions.append({"type": "quest_advance", "quest": verdict["quest"], "stage": verdict["objective"]})
         elif verdict.get("verdict") == "failed":
             actions.append({"type": "quest_fail", "quest": verdict["quest"]})
+        elif verdict.get("verdict") == "overdue":
+            actions.append({"type": "quest_overdue", "quest": verdict["quest"]})
     for quest in parsed.get("start") if isinstance(parsed.get("start"), list) else []:
         if isinstance(quest, dict):                 # some models answer {"quest": "id"} here too, the way verdicts are written
             quest = quest.get("quest", quest.get("id"))
@@ -589,8 +612,8 @@ def _unknown_places(card, state, text=None):
     here = state["actors"][PLAYER]["location"]
     near = set(l["id"] for l in _exits(card, state, here)) if here in places(card, state) else set()
     for quest_id, progress in state["quests"].items():
-        if progress["status"] == "active" and quest_id in card.quests:
-            stage = card.quests[quest_id]["stages"][progress["stage"]]
+        if progress["status"] == "active" and quest_id in quests(card, state):
+            stage = quests(card, state)[quest_id]["stages"][progress["stage"]]
             text += "\n" + "\n".join(stage.get(key) or "" for key in ("description", "guidance", "hint", "done_when"))
     return [l for l in hidden if l["id"] in near or (l.get("name") and re.search(r"(?<!\w)%s(?!\w)" % re.escape(l["name"]), text, re.I))]
 
@@ -765,12 +788,12 @@ def describe_quests(card, state, detail="narrator"):
     only what the player can see in their quest log, for helpers that speak for the player."""
     active = []
     available = ["- %s: %s" % (_named(quest, "title"), quest.get("description", "")) for quest in available_quests(card, state)]
-    for quest in card.data.get("quests", []):
+    for quest in quest_list(card, state):
         progress = state["quests"].get(quest["id"])
         if progress is not None and progress["status"] == "active":
             stage = quest["stages"][progress["stage"]]
-            line = "- %s. Current objective [%s], part %d of %d: %s" % (
-                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"])
+            line = "- %s. Current objective [%s], part %d of %d: %s%s" % (
+                _named(quest, "title"), stage["id"], progress["stage"] + 1, len(quest["stages"]), stage["description"], _task_terms(card, state, quest, progress))
             if detail == "narrator":
                 if stage_guidance(stage):
                     line += "\n  How to play it: %s" % stage_guidance(stage)

@@ -125,6 +125,10 @@ class Card(object):
     def allow_generated_items(self):
         return self.data["rules"].get("allow_generated_items", True)
 
+    @property
+    def allow_generated_quests(self):
+        return self.data["rules"].get("allow_generated_quests", True)
+
     def read_asset(self, rel):
         if self._package is not None:
             with zipfile.ZipFile(io.BytesIO(self._package)) as z:

@@ -865,7 +865,7 @@ init python:
                 ## time: the bookkeeper records what changed, and the quest judge alone decides whether
                 ## a quest has moved on. Both must answer, or the turn does not go through.
                 stage = "record what the reply changed"
-                judged = bool(card.quests)
+                judged = bool(aig_state.quests(card, state))
                 jobs = {"books": ("record_changes", aig_prompt.bookkeeper_prompt(card, state, text, results, narration, quests=not judged, prompts=preset["prompts"], clock=(state.get("header"), clock)), "actions")}
                 if judged:
                     jobs["quests"] = ("judge_quests", aig_prompt.judge_prompt(card, state, text, narration, prompts=preset["prompts"]), "verdicts")
@@ -886,7 +886,7 @@ init python:
                     world_actions = [a for a in world_actions if not str(a.get("type", "")).startswith("quest_")]
                     ## The judge's verdicts go first: a quest finished by this text pays its reward before
                     ## the bookkeeper's report of the same reward being handed over is looked at.
-                    world_actions = aig_prompt.parse_judge(have["quests"], card) + world_actions
+                    world_actions = aig_prompt.parse_judge(have["quests"], card, state) + world_actions
             results = results + aig_actions.apply_actions(card, state, world_actions)
             if params().get("header", True):
                 clock, moved = keep_time(card, state, clock, text, narration, preset, once)

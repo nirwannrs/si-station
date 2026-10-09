@@ -254,6 +254,42 @@ class EngineTest(unittest.TestCase):
         self.ok(type="set_state", state="asleep")
         self.assertEqual([what for what, name in limits(self.card, self.me)], ["all", "speech", "sight", "hearing"])
 
+    def test_the_story_can_give_quests_of_its_own(self):
+        quest = lambda: self.state["generated_quests"]
+        made = self.ok(type="create_quest", title="Check the portrait", description="At noon on Day 1 Mira asked Traveler to check her sister's portrait.",
+                       parent="missing_courier", due="Day 2, 06:00", late="stands")
+        self.assertEqual(made, "New quest: Check the portrait. At noon on Day 1 Mira asked Traveler to check her sister's portrait. (part of The Missing Courier; due Day 2, 06:00, late after that)")
+        self.assertEqual(self.state["quests"]["gen_check_the_portrait"], {"status": "active", "stage": 0, "met": []})
+        self.assertEqual((quest()["gen_check_the_portrait"]["parent"], quest()["gen_check_the_portrait"]["late"]), ("missing_courier", "stands"))
+        self.rejected(type="create_quest", title="check the portrait")                                # already under way
+        self.rejected(type="create_quest", title="")
+        self.ok(type="create_quest", title="Fetch water", parent="no such quest", due="before the bell", late="fails")
+        self.assertEqual((quest()["gen_fetch_water"]["parent"], quest()["gen_fetch_water"]["late"]), (None, "fails"))
+        self.ok(type="create_quest", title="Sweep the yard")
+        self.rejected(type="quest_overdue", quest="gen_sweep_the_yard")                               # it has no time it is due by
+        # A due time the game can read is watched by the game, against the story's own clock.
+        self.state["header"] = "[ 05:59 | Day 2 | Common Room ]"
+        self.assertEqual(apply_actions(self.card, self.state, []), [])
+        self.state["header"] = "[ 06:01 | Day 2 | Common Room ]"
+        late = apply_actions(self.card, self.state, [])
+        self.assertEqual([r["message"] for r in late], ["Quest overdue: Check the portrait. It was due Day 2, 06:00, and can still be done."])
+        self.assertEqual(self.state["quests"]["gen_check_the_portrait"]["status"], "active")
+        self.assertEqual(apply_actions(self.card, self.state, []), [])                                # said once
+        # One it cannot read is the story's to call, and this one fails when missed.
+        self.assertEqual(self.ok(type="quest_overdue", quest="Fetch water"), "Quest failed: Fetch water. It was due before the bell.")
+        self.assertEqual(self.state["quests"]["gen_fetch_water"]["status"], "failed")
+        # Finished like any quest, by its one objective.
+        self.assertEqual(self.ok(type="quest_advance", quest="gen_sweep_the_yard", stage="done"), "Quest completed: Sweep the yard.")
+        # A quest that is part of another ends with it.
+        closed = apply_actions(self.card, self.state, [{"type": "quest_fail", "quest": "missing_courier"}])
+        self.assertEqual([r["message"] for r in closed], ["Quest failed: The Missing Courier.", "Quest closed: Check the portrait. It was part of The Missing Courier, which is over."])
+        self.assertEqual(self.state["quests"]["gen_check_the_portrait"]["status"], "closed")
+        # They are kept in the save and survive the card being replaced by a newer copy.
+        self.assertEqual(reconcile(self.card, self.state), [])
+        self.assertEqual(sorted(quest()), ["gen_check_the_portrait", "gen_fetch_water", "gen_sweep_the_yard"])
+        self.card.data["rules"]["allow_generated_quests"] = False
+        self.rejected(type="create_quest", title="Another")
+
     def test_what_the_player_does_with_something_the_game_does_not_have_is_left_to_the_story(self):
         """The helper that reads the player's message can only answer in game actions. When what
         it names is not there to act on, the engine rules on nothing and the story decides."""

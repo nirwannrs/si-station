@@ -228,6 +228,30 @@
             }
           },
           {
+            "description": "Narrator only. Only valid when rules.allow_generated_quests is true. Starts a quest the card does not define, with one objective. parent is a quest it is part of: it is closed when that quest is done or failed. due is when it must be done by, in the story's words; where it gives a day number (and an hour) the game marks it overdue itself from the story's clock. late is what missing that does: fails, or stands (marked overdue, still open).",
+            "type": "object",
+            "required": ["type", "title"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "create_quest" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "parent": { "$ref": "#/$defs/id" },
+              "due": { "type": "string" },
+              "late": { "enum": ["fails", "stands"], "default": "stands" }
+            }
+          },
+          {
+            "description": "Narrator only. The time a quest was due by has passed: it fails or is marked overdue, as it was set up. Only for a quest that has a due time.",
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "quest_overdue" },
+              "quest": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
             "description": "Narrator only. The engine handles levelling up, stat gains and skills that unlock by level.",
             "type": "object",
             "required": ["type", "amount"],

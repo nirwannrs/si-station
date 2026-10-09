@@ -23,6 +23,7 @@
   },
   "rules": {
     "stats": [],
+    "allow_generated_quests": false,
     "features": {
       "inventory": false,
       "equipment": false,

@@ -143,6 +143,10 @@ def new_game(card, persona=None):
         "shops": dict((s["id"], dict((e["item"], e.get("qty")) for e in s.get("stock", []))) for s in card.data.get("shops", [])),
         # items the narrator invented during play, same shape as card items
         "generated_items": {},
+        # quests the story made during play, same shape as card quests with one objective, plus
+        # "parent" (the quest it is part of, or None), "due" (when it must be done by, in the story's
+        # words, or None) and "late" ("fails" or "stands": what missing that does)
+        "generated_quests": {},
         # finished turns, oldest first: {"player": text, "results": [{"ok", "message"}], "narration": text}
         "history": [],
         # what happened in the first `summarized` turns; those are kept for the player's log but no longer sent to the model
@@ -285,11 +289,14 @@ def reconcile(card, state):
         if actor["location"] not in places(card, state):
             actor["location"] = starting["location"]
 
-    for quest_id in [q for q in state["quests"] if q not in card.quests]:
+    for quest_id in [q for q in state["quests"] if q not in quests(card, state)]:
         del state["quests"][quest_id]
         notes.append("A quest this card no longer has was removed (%s)." % quest_id)
     for quest_id, progress in state["quests"].items():
-        progress["stage"] = min(progress["stage"], len(card.quests[quest_id]["stages"]) - 1)
+        progress["stage"] = min(progress["stage"], len(quests(card, state)[quest_id]["stages"]) - 1)
+    for quest in state["generated_quests"].values():
+        if quest.get("parent") not in quests(card, state):
+            quest["parent"] = None              # the quest it was part of is no longer in the card: it stands alone
 
     if state["battle"] and (not card.battle_system or any(e not in state["actors"] for e in state["battle"]["enemies"])):
         state["battle"] = None
@@ -449,7 +456,7 @@ def cast_in_play(card, state, text=""):
     world = card.data.get("world", {})
     told = [text, world.get("opening", ""), world.get("scenario", ""), world.get("narrator_instructions", "")]
     for quest_id, progress in state.get("quests", {}).items():
-        quest = card.quests.get(quest_id)
+        quest = quests(card, state).get(quest_id)
         if quest and progress["status"] == "active":
             stage = quest["stages"][min(progress["stage"], len(quest["stages"]) - 1)]
             told += [stage.get("description", ""), stage.get("guidance") or stage.get("hint") or "", stage.get("done_when", ""), quest.get("fail_when", "")]
@@ -467,6 +474,23 @@ def cast_in_play(card, state, text=""):
 def note_cast(card, state, text=""):
     """Records who has entered the story by now. Call it with each new piece of story."""
     state["cast"] = cast_in_play(card, state, text)
+
+
+# Quests the story makes during play: something the player takes on that the card never wrote (a
+# favour, a promise, an errand). They are kept in the save in the shape of a card quest with one
+# objective, so everything that handles quests handles them, plus what only they have: the quest
+# they are part of, if any, and when they are due.
+
+def quests(card, state):
+    """Every quest there is: the card's, and those the story has made. id -> quest."""
+    found = dict(card.quests)
+    found.update(state.get("generated_quests", {}))
+    return found
+
+
+def quest_list(card, state):
+    """The same, in order: the card's as the card lists them, then the story's as they were made."""
+    return list(card.data.get("quests", [])) + list(state.get("generated_quests", {}).values())
 
 
 def available_quests(card, state):

@@ -8,7 +8,8 @@ plain factual sentences because they are fed back to the narrator.
 import re
 
 from .card import CAPABILITIES, PLAYER, SLOTS
-from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
+from . import clock
+from .state import game_checked, knows_place, left_place, places, quest_marks, quests, reveal
 from .state import all_items, blocked, unaware, clamp_stat, effective_stat, stat_max, stat_min, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
@@ -66,7 +67,7 @@ def apply_actions(card, state, actions, by_player=False):
     results, moved_on = [], set()
     ## New places and new items first, whatever order they were listed in: a model often writes
     ## "move there" above "create it", and the move must not fail for want of the place.
-    made = ("create_location", "create_item")
+    made = ("create_location", "create_item", "create_quest")
     actions = [a for a in actions if isinstance(a, dict) and a.get("type") in made] + [a for a in actions if not (isinstance(a, dict) and a.get("type") in made)]
     for action in actions:
         if isinstance(action, dict) and action.get("type") == "quest_advance":
@@ -609,7 +610,7 @@ def _move(card, state, a):
 
 
 def _quest_start(card, state, a):
-    qid, quest = _find(card.quests, a.get("quest"), "quest")
+    qid, quest = _find(quests(card, state), a.get("quest"), "quest")
     if qid in state["quests"]:
         raise Rejected("Quest %s was already started." % quest["title"])
     if quest.get("after") and state["quests"].get(quest["after"], {}).get("status") != "done":
@@ -619,8 +620,67 @@ def _quest_start(card, state, a):
     return "Quest started: %s. Objective: %s" % (quest["title"], quest["stages"][0]["description"])
 
 
+def _create_quest(card, state, a):
+    """Something the player has taken on in the story that the card never wrote. It starts at once."""
+    if not card.allow_generated_quests:
+        raise Rejected("This game only has the quests its card defines.")
+    title = a.get("title")
+    if not isinstance(title, str) or not title.strip() or len(title) > 80:
+        raise Rejected("A new quest needs a short title.")
+    title = " ".join(title.split())
+    known = quests(card, state)
+    try:
+        qid, same = _find(known, title, "quest")
+        if state["quests"].get(qid, {}).get("status") == "active":
+            raise Rejected("%s is already under way." % same["title"])
+    except NotTheGames:
+        pass
+    base = "gen_" + ("".join(c if c.isalnum() else "_" for c in title.lower()).strip("_") or "quest")
+    qid, n = base, 2
+    while qid in known:
+        qid, n = "%s_%d" % (base, n), n + 1
+    text = lambda key, most: " ".join(a[key].split())[:most] if isinstance(a.get(key), str) and a[key].strip() else None
+    try:
+        parent = _find(known, a.get("parent"), "quest")[0] if a.get("parent") else None
+    except Rejected:
+        parent = None
+    about = text("description", 400) or title
+    quest = {"id": qid, "title": title, "description": about, "stages": [{"id": "done", "description": about}], "generated": True,
+             "parent": parent, "due": text("due", 80), "late": "fails" if a.get("late") == "fails" else "stands"}
+    state.setdefault("generated_quests", {})[qid] = quest
+    state["quests"][qid] = {"status": "active", "stage": 0, "met": []}
+    return "New quest: %s. %s%s" % (title, about, _terms_of(card, state, quest))
+
+
+def _terms_of(card, state, quest):
+    parts = []
+    if quest.get("parent"):
+        parts.append("part of %s" % quests(card, state)[quest["parent"]]["title"])
+    if quest.get("due"):
+        parts.append("due %s, %s" % (quest["due"], "or it fails" if quest.get("late") == "fails" else "late after that"))
+    return " (%s)" % "; ".join(parts) if parts else ""
+
+
+def _overdue(card, state, quest, progress):
+    """The time a quest was due by has passed: it fails, or stands marked late, as it was set up."""
+    progress["overdue"] = True
+    if quest.get("late") == "fails":
+        progress["status"] = "failed"
+        return "Quest failed: %s. It was due %s." % (quest["title"], quest["due"])
+    return "Quest overdue: %s. It was due %s, and can still be done." % (quest["title"], quest["due"])
+
+
+def _quest_overdue(card, state, a):
+    quest, progress = _active_quest(card, state, a)
+    if not quest.get("due"):
+        raise Rejected("Quest %s has no time it is due by." % quest["title"])
+    if progress.get("overdue"):
+        raise Rejected("Quest %s is already marked overdue." % quest["title"])
+    return _overdue(card, state, quest, progress)
+
+
 def _active_quest(card, state, a):
-    qid, quest = _find(card.quests, a.get("quest"), "quest")
+    qid, quest = _find(quests(card, state), a.get("quest"), "quest")
     progress = state["quests"].get(qid)
     if not progress or progress["status"] != "active":
         raise Rejected("Quest %s is not active." % quest["title"])
@@ -713,8 +773,25 @@ def settle_quests(card, state):
     that was already true when the quest began (being at the inn) skips nothing.
     """
     results = []
+    known = quests(card, state)
     for quest_id, progress in state["quests"].items():
-        quest = card.quests.get(quest_id)
+        quest = known.get(quest_id)
+        if quest is None or progress["status"] != "active" or not quest.get("generated"):
+            continue
+        # A quest that is part of another ends with it.
+        over = state["quests"].get(quest.get("parent"), {}).get("status")
+        if over in ("done", "failed"):
+            progress["status"] = "closed"
+            results.append({"action": {"type": "quest_fail", "quest": quest_id}, "ok": True,
+                            "message": "Quest closed: %s. It was part of %s, which is over." % (quest["title"], known[quest["parent"]]["title"])})
+            continue
+        # A time it is due by that the game can read against the story's clock is watched by the
+        # game. One it cannot read is the story's to call (quest_overdue).
+        due, now = clock.read(quest.get("due") or ""), clock.read(state.get("header") or "")
+        if not progress.get("overdue") and None not in (due["day"], now["day"], now["minutes"]) and (now["day"], now["minutes"]) > (due["day"], due["minutes"] if due["minutes"] is not None else 24 * 60):
+            results.append({"action": {"type": "quest_overdue", "quest": quest_id}, "ok": True, "message": _overdue(card, state, quest, progress)})
+    for quest_id, progress in state["quests"].items():
+        quest = known.get(quest_id)
         while quest is not None and progress["status"] == "active":
             now = quest_marks(card, state, quest)
             fresh = set(now) - set(progress.get("met", now))
@@ -960,6 +1037,8 @@ _HANDLERS = {
     "quest_start": _quest_start,
     "quest_advance": _quest_advance,
     "quest_fail": _quest_fail,
+    "create_quest": _create_quest,
+    "quest_overdue": _quest_overdue,
     "gain_xp": _gain_xp,
     "use_skill": _use_skill,
     "unlock_skill": _unlock_skill,

@@ -299,6 +299,29 @@ class PromptFollowsFeaturesTest(unittest.TestCase):
         self.assertNotIn("<actions>", system + messages[-1]["content"])
 
 
+class StoryQuestsTest(unittest.TestCase):
+    def test_a_quest_the_story_made_is_told_and_judged_with_the_cards_own(self):
+        card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(card)
+        self.assertIn("create_quest", prompt.action_protocol(card))
+        apply_actions(card, state, [{"type": "create_quest", "title": "Check the portrait", "description": "At noon Mira asked Traveler to check the portrait.",
+                                     "parent": "missing_courier", "due": "sunrise tomorrow", "late": "fails"}])
+        told = prompt.describe_quests(card, state)
+        self.assertIn("The Missing Courier (missing_courier). Current objective", told)                    # the card's quest is still told with it
+        for part in ("- Check the portrait (gen_check_the_portrait). Current objective [done], part 1 of 1: At noon Mira asked Traveler to check the portrait.",
+                     "\n  Taken on in the story.", "\n  Part of The Missing Courier; it ends when that quest does.", "\n  Due: sunrise tomorrow. If that passes it fails."):
+            self.assertIn(part, told)
+        asked = prompt.judge_prompt(card, state, "I wait.", "Rain.")[1][0]["content"]
+        self.assertIn("Check the portrait (gen_check_the_portrait)", asked)
+        self.assertIn("Due: sunrise tomorrow.", asked)
+        verdicts = json.dumps({"verdicts": [{"quest": "gen_check_the_portrait", "objective": "done", "verdict": "overdue"}, {"quest": "gen_nothing", "verdict": "failed"}], "start": []})
+        self.assertEqual(prompt.parse_judge(verdicts, card, state), [{"type": "quest_overdue", "quest": "gen_check_the_portrait"}])
+        self.assertEqual(prompt.parse_judge(verdicts, card), [])                                           # without the save it knows only the card's
+        self.assertEqual(apply_actions(card, state, prompt.parse_judge(verdicts, card, state))[0]["message"], "Quest failed: Check the portrait. It was due sunrise tomorrow.")
+        card.data["rules"]["allow_generated_quests"] = False
+        self.assertNotIn("create_quest", prompt.action_protocol(card))
+
+
 class RecordedOnceTest(unittest.TestCase):
     def test_the_bookkeeper_is_shown_what_was_just_recorded(self):
         """A reply that returns to something already handed over must not be read as a second

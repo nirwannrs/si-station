@@ -203,11 +203,13 @@ init python:
 
             played = turn("I drink from the cup on the table.", **{
                 CLERK: actions({"type": "use_item", "item": "a cup of wine"}),
-                BOOKS: actions({"type": "create_item", "name": "Wool Scarf", "slot": "accessory"}, {"type": "set_state", "state": "gagged", "stops": ["speech"]}),
+                BOOKS: actions({"type": "create_item", "name": "Wool Scarf", "slot": "accessory"}, {"type": "set_state", "state": "gagged", "stops": ["speech"]},
+                               {"type": "create_quest", "title": "Mind the fire", "description": "Mira asked for the fire to be kept in.", "due": "Day 1, 11:30 PM"}),
                 STORY: "[ 09:40 PM | Day 1 | Common Room ]\n\nRain drums on the roof."})
             assert not [r for r in played["results"] if r["ok"] is False], "something the game does not have was refused: %s" % played["results"]
             assert game_state["generated_items"]["gen_wool_scarf"]["slot"] == "accessory"
             assert me["states"]["gagged"]["stops"] == ["speech"]
+            assert game_state["quests"]["gen_mind_the_fire"]["status"] == "active" and game_state["generated_quests"]["gen_mind_the_fire"]["due"], "the story's own quest was not started"
             assert "09:40" in game_state["header"]
 
             played = turn('"Can anyone hear me?" *I wave an arm*', **{
@@ -379,7 +381,7 @@ init python:
             assert store.card_name == selftest.stored, "the save still points at %r, not %r" % (store.card_name, selftest.stored)
             assert len(game_state["history"]) == selftest.turns, "%d turns after loading, %d when saved" % (len(game_state["history"]), selftest.turns)
             ## What the story made during play is kept in the save, not in the card, and must come back with it.
-            assert game_state["actors"]["player"]["equipment"].get("accessory") == "gen_wool_scarf" and "gen_wool_scarf" in game_state["generated_items"], "what the story made was lost on loading"
+            assert game_state["actors"]["player"]["equipment"].get("accessory") == "gen_wool_scarf" and "gen_wool_scarf" in game_state["generated_items"] and "gen_mind_the_fire" in game_state["generated_quests"], "what the story made was lost on loading"
             assert current_card().id == game_state["card_id"]
             return "plays on with %r, %d turns" % (store.card_name, len(game_state["history"]))
         selftest_step("the save loads although its card is now a file", loaded)

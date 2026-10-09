@@ -320,6 +320,7 @@ You are the quest judge of a text adventure. Decide, strictly, whether each ques
 Give one verdict for each quest in progress:
 - "done": the current objective is completely finished in the story. Every part of it has happened and is over. If it has several parts (several tests, several rooms, several opponents), all of them are over. If it gives a "Finished only when", that has plainly happened.
 - "failed": only if the quest gives a "Fails if" and that has happened, or the story has made the quest impossible.
+- "overdue": only for a quest that gives a "Due" time, when that time has passed in the story and the quest is neither done nor already marked as past it.
 - "not_yet": everything else, including an objective that has started, is going well, or is nearly over. This is the usual answer.
 
 When unsure, answer not_yet. Nothing is lost by moving on a turn later; moving on early skips part of the story.

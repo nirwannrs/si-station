@@ -529,6 +529,7 @@ const SECTIONS = [
     { t: "group", k: "rules", label: "Details", fields: [
       { t: "text", k: "currency_name", label: "What money is called", placeholder: "Gold", when: () => has("money") },
       { t: "bool", k: "allow_generated_locations", label: "The story may create new places", help: "Somewhere the card does not define, such as a pocket dimension or wherever a villain throws everyone. Off means the map is fixed to your locations.", default: true, redraw: false, when: () => (card.locations || []).length },
+      { t: "bool", k: "allow_generated_quests", label: "The story may give new quests", help: "Things the player takes on in play that you did not write: a favour, a promise, an errand. Each can be part of one of your quests and can have a time it is due by. Off means only the quests you define exist.", default: true, redraw: false },
       { t: "bool", k: "allow_generated_items", label: "The AI may invent new items", help: "Plain things, things that are used up, and with equipment on, things to wear. The AI can change the ones it made, never yours. Off means only the items you define exist.", default: true, redraw: false, when: () => has("inventory") },
       { t: "text", k: "relationship_name", label: "What the relationship value is called", placeholder: "Affection", redraw: true, when: () => has("relationships") },
       { t: "group", k: "leveling", label: "Levelling", when: () => has("levels"), fields: [

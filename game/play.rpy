@@ -143,7 +143,7 @@ init python:
             ("skills", _("Skills"), card.has("skills")),
             ("people", _("People"), card.has("relationships")),
             ("map", _("Map"), bool(aig_state.place_list(card, store.game_state))),
-            ("quests", _("Quests"), bool(card.quests)),
+            ("quests", _("Quests"), bool(aig_state.quests(card, store.game_state))),
             ("journal", _("Journal"), bool(store.game_state.get("journal")) or bool(store.game_state["history"])),
             ("shop", _("Shop"), aig_prompt.uses(card, "shops") and bool(shops_here())),
         ]
@@ -349,11 +349,16 @@ screen hud(start="inventory"):
                                 text _("This story has no map.")
 
                         elif tab == "quests":
-                            for quest in card.data.get("quests", []):
+                            for quest in aig_state.quest_list(card, game_state):
                                 $ progress = game_state["quests"].get(quest["id"])
                                 if progress and progress["status"] == "active":
-                                    text esc(quest["title"]) size 34
+                                    text esc(quest["title"]) size (34 if not quest.get("generated") else 30)
                                     text esc(quest["stages"][progress["stage"]]["description"])
+                                    ## What only a quest the story made has: what it is part of, and when it is due.
+                                    if quest.get("parent") in aig_state.quests(card, game_state):
+                                        text esc("Part of %s" % aig_state.quests(card, game_state)[quest["parent"]]["title"]) size 22 color "#aaaaaa"
+                                    if quest.get("due"):
+                                        text esc("Due %s%s" % (quest["due"], " (past due)" if progress.get("overdue") else "")) size 22 color ("#ff8080" if progress.get("overdue") else "#ffd28a")
                                 elif progress:
                                     text esc("%s (%s)" % (quest["title"], progress["status"])) color "#888888"
                             if not game_state["quests"]:
