@@ -239,7 +239,7 @@ _builtin('narrator_header', 'story', "The time and place line", "Has the story m
 Begin every reply with one line in square brackets, in exactly this form. Then a blank line, then the story.
 {{format}}
 Write the line once, with every part already filled in, and keep the symbols and the order as they are. The form above is a pattern to follow, never to be written out as it stands, and the line is never remarked on or corrected in the reply.
-- Carry it on from the line that heads your previous reply. Move the time forward by as long as what has happened since took: minutes for talk, longer for work or a walk. When the story skips time (sleep, a journey, study, being unconscious), skip it in the line too, and let the day and the date follow.
+- Carry it on from the line that heads your previous reply. Move the time forward by as long as what has happened since took: minutes for talk, longer for work or a walk. When the story skips time (sleep, a journey, study, being unconscious), skip it in the line too, and let the day and the date follow. The line is the world's time as the story has it: where time there stands still or runs some other way, so does the line.
 - The place is the Location the game state gives, then the exact spot within it. It changes the moment {{user}} is somewhere else.
 - The weather has its symbol and the temperature as it is felt. It changes the way weather does: gradually, with the hour and the season.
 - In an invented world, use that world's own calendar, month names and era, and stay with them once chosen. In the real world, use real dates.
@@ -374,7 +374,7 @@ _builtin('keep_time', 'helper', "Keep the clock", "Puts the time and place line 
 You keep the clock of a text adventure. Every reply of the story is headed by one line that gives the hour, the date, the place and the weather. The game has found something wrong with the newest line and tells you what. Write the line as it should be.
 
 - Keep the form of the line exactly: the same parts, in the same order, with the same symbols. Change only what has to change.
-- Time only runs forward. Work out how long the reply took from what happens in it: a few minutes for talk, longer for work, a walk or a meal, hours for sleep or a journey. Add that to the line before. When midnight passes, the day and the date move on with it.
+- The line follows time as the story has it. Ordinarily that runs forward: work out how long the reply took from what happens in it and add that to the line before, and when midnight passes the day and the date move on with it. Where the story itself holds time still or turns it some other way, the line does the same. A line that is already right for the story is given back as it is.
 - Say where the player is by the end of the reply, as player_at: a place id from [Places]. Go only by what the reply shows. If it shows them arrive somewhere, that is where they are. If it does not show them leave, they are where the game has them, whatever the line says. Use null when there is no list of places or no telling.
 - The place in the line is the place you gave as player_at, then the exact spot within it.
 - Leave the weather as it is unless hours have passed.

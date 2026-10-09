@@ -324,9 +324,14 @@ def split_header(text):
 
 
 # The clock is kept by three hands. The story model writes the line. The game reads it, and knows
-# when it cannot be right: time that ran backwards, a clock that has not moved while the story went
-# on, a place that is not where the game has the player, or no line at all. Then, and only then,
-# a helper job is asked to write the line as it should be, and to say where the player is.
+# when it looks wrong: time that ran backwards, a clock that has not moved for several replies, a
+# place that is not where the game has the player, or no line at all. Then, and only then, a helper
+# job is asked to write the line as it should be, and to say where the player is.
+#
+# Looking wrong is not being wrong. The line is the story's time, and a story may hold time still
+# or turn it back. Only a reader of the story can tell that from a slip, so the game never decides
+# it: the helper does, and when it gives the line back as it stood, the game takes its word and
+# does not ask again for as long as the clock stays at that moment (state["clock_held"]).
 STUCK = 3       # turns the clock may stand at the same minute before it is taken to be stuck
 
 
@@ -356,19 +361,28 @@ def clock_problems(card, state, before, now):
         return ["The reply was given no time and place line. Write one, carried on from the line before."] if before else []
     problems = []
     if before and clock.went_back(before, now):
-        problems.append("The time has gone backwards from the line before. Time only runs forward.")
-    else:
+        problems.append("The time is earlier than in the line before.")
+    elif not (state.get("clock_held") and clock.same_moment(state["clock_held"], now)):
         stood = 0
         for turn in reversed(state["history"]):
             if not (turn.get("header") and clock.same_moment(turn["header"], now)):
                 break
             stood += 1
         if stood >= STUCK:
-            problems.append("The clock has stood at the same minute for %d replies while the story went on. Move it on by what this reply took." % (stood + 1))
+            problems.append("The clock has stood at the same minute for %d replies." % (stood + 1))
     at, here = header_place(card, state, now), places(card, state).get(me["location"])
     if at and here and at != here["id"]:
         problems.append("The line puts %s at %s, but the game has them at %s. Only one of the two can be right." % (me["name"], places(card, state)[at]["name"], here["name"]))
     return problems
+
+
+def settle_clock(state, now, fixed):
+    """Remembers that the timekeeper left the clock where the story model had it, so that a clock
+    the story is holding still is not asked about again on every turn it stays there."""
+    if now and fixed and clock.same_moment(now, fixed):
+        state["clock_held"] = fixed
+    else:
+        state.pop("clock_held", None)
 
 
 def timekeeper_prompt(card, state, before, now, problems, player_text, narration, prompts=None):
@@ -389,15 +403,17 @@ def timekeeper_prompt(card, state, before, now, problems, player_text, narration
     return prompt_text(prompts, "keep_time"), [{"role": "user", "content": fill(card, state, "\n\n".join(parts))}]
 
 
-def parse_timekeeper(text, card, state, before):
+def parse_timekeeper(text, card, state, before, now=None):
     """(the line as the timekeeper put it right, the id of the place it says the player is in).
     Either is None when the answer does not give it, or gives a line that would itself be wrong:
-    the form written out unfilled, or a time earlier than the line before."""
+    the form written out unfilled, or a time earlier than the line before. An earlier time is
+    taken only when it is the very time the story model wrote (now): the helper upholding the
+    story, not a slip of its own."""
     parsed = extract_json(text)
     parsed = parsed if isinstance(parsed, dict) else {}
     line = parsed.get("line")
     line = _bracketed(line) if isinstance(line, str) and len(line.strip("[] ")) >= 6 and "\n" not in line.strip() else None
-    if line and (_UNFILLED.search(line) or len(line) > 400 or (before and clock.went_back(before, line))):
+    if line and (_UNFILLED.search(line) or len(line) > 400 or (before and clock.went_back(before, line) and not (now and clock.same_moment(now, line)))):
         line = None
     at = parsed.get("player_at")
     return line, at if isinstance(at, str) and at in places(card, state) else None

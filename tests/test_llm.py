@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "game"))
 
-from aigame import clock, llm, prompt  # noqa: E402
+from aigame import clock, llm, prompt, wording  # noqa: E402
 from aigame.actions import apply_actions  # noqa: E402
 from aigame.card import Card, load_card  # noqa: E402
 from aigame.state import new_game, track  # noqa: E402
@@ -348,7 +348,7 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(prompt.clock_problems(c, s, before, self.line("09:45 PM")), [])
         self.assertEqual(prompt.clock_problems(c, s, None, None), [])
         self.assertIn("no time and place line", prompt.clock_problems(c, s, before, None)[0])
-        self.assertIn("gone backwards", prompt.clock_problems(c, s, before, self.line("08:00 PM"))[0])
+        self.assertIn("earlier than in the line before", prompt.clock_problems(c, s, before, self.line("08:00 PM"))[0])
         s["history"] = [{"player": "x", "results": [], "narration": "y", "header": before} for n in range(2)]
         self.assertEqual(prompt.clock_problems(c, s, before, before), [])                           # two replies in the same minute can happen
         s["history"].append(dict(s["history"][0]))
@@ -366,7 +366,7 @@ class ClockTest(unittest.TestCase):
         c, s = self.card, self.state
         before, now = self.line("09:40 PM"), self.line("08:00 PM", place="Stable - by the mare's stall")
         system, messages = prompt.timekeeper_prompt(c, s, before, now, prompt.clock_problems(c, s, before, now), "I go out to the stable.", "You cross the yard.")
-        for part in ("[Places]", "Stable (stable)", "[The line before]", "[The line now]", "- The time has gone backwards", "- The line puts", "[The reply]\nYou cross the yard."):
+        for part in ("[Places]", "Stable (stable)", "[The line before]", "[The line now]", "- The time is earlier", "- The line puts", "[The reply]\nYou cross the yard."):
             self.assertIn(part, messages[0]["content"])
         fixed = self.line("09:44 PM", place="Stable - by the mare's stall")
         self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": fixed, "player_at": "stable"}), c, s, before), (fixed, "stable"))
@@ -374,6 +374,26 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": self.line("07:00 PM"), "player_at": "the moon"}), c, s, before), (None, None))   # still backwards; no such place
         self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": prompt.DEFAULT_HEADER}), c, s, before), (None, None))                        # the form, not a line
         self.assertEqual(prompt.parse_timekeeper("I think it is about ten.", c, s, before), (None, None))
+
+    def test_a_clock_the_story_holds_still_or_turns_back_is_left_alone(self):
+        """The game cannot tell a slip from a story in which time has stopped or gone back. It asks
+        once, takes the timekeeper's word, and does not ask again while the clock stays there."""
+        c, s = self.card, self.state
+        held = self.line("09:40 PM")
+        s["history"] = [{"player": "x", "results": [], "narration": "y", "header": held} for n in range(5)]
+        self.assertEqual(len(prompt.clock_problems(c, s, held, held)), 1)                           # it looks stuck: ask
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": held, "player_at": None}), c, s, held, held)[0], held)
+        prompt.settle_clock(s, held, held)                                                          # the timekeeper says it stands
+        self.assertEqual(prompt.clock_problems(c, s, held, held), [])                               # so nothing is asked while it does
+        self.assertEqual(prompt.clock_problems(c, s, held, self.line("09:41 PM")), [])
+        moved = self.line("09:55 PM")
+        prompt.settle_clock(s, held, moved)                                                         # another time it says the clock should have moved
+        self.assertNotIn("clock_held", s)
+        back = self.line("03:00 PM")
+        self.assertEqual(prompt.parse_timekeeper(json.dumps({"line": back}), c, s, held, back)[0], back)        # the story turned time back, and the helper upholds it
+        self.assertIsNone(prompt.parse_timekeeper(json.dumps({"line": self.line("02:00 PM")}), c, s, held, back)[0])   # a backward time of its own is still a slip
+        for text in (wording.builtin_prompt("keep_time")["text"], wording.builtin_prompt("narrator_header")["text"]):
+            self.assertIn("as the story has it", text)
 
 
 class StatesPromptTest(unittest.TestCase):

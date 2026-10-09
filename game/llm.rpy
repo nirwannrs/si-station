@@ -1054,12 +1054,15 @@ init python:
         before = state.get("header") or aig_prompt.header_start(card, state)
         problems = aig_prompt.clock_problems(card, state, before, line)
         if not problems:
+            if not aig_prompt.clock.same_moment(state.get("clock_held") or "", line or ""):
+                state.pop("clock_held", None)       # the clock has moved on from where it was being held
             return line, []
         try:
             reply = once("clock", lambda: run_helper("keep_time", aig_prompt.timekeeper_prompt(card, state, before, line, problems, text, narration, prompts=preset["prompts"])))
         except aig_llm.LLMError:
             return line, []
-        fixed, place = aig_prompt.parse_timekeeper(reply, card, state, before)
+        fixed, place = aig_prompt.parse_timekeeper(reply, card, state, before, line)
+        aig_prompt.settle_clock(state, line, fixed)
         moved = []
         if place and place != state["actors"]["player"]["location"]:
             ## The line was right and the books were not: the reply took the player somewhere and nobody recorded it.
