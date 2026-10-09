@@ -9,7 +9,7 @@ import re
 
 from .card import CAPABILITIES, PLAYER, SLOTS
 from .state import game_checked, knows_place, left_place, places, quest_marks, reveal
-from .state import all_items, blocked, clamp_stat, effective_stat, stat_max, stat_min, state_name, together, xp_needed
+from .state import all_items, blocked, unaware, clamp_stat, effective_stat, stat_max, stat_min, state_name, together, xp_needed
 
 # The card system each action belongs to. An action for a system the card switched off is rejected.
 REQUIRES = {
@@ -21,8 +21,15 @@ REQUIRES = {
     "set_state": "states", "clear_state": "states",
 }
 
-# What the player must be free to do for each thing they can attempt. A state that blocks it stops
-# the attempt. The narrator's own actions are not held to this: guards can drag a bound prisoner off.
+# What the player must be free to do for each thing they can attempt. A state that blocks it stands
+# in the way of the attempt. The narrator's own actions are not held to this: guards can drag a
+# bound prisoner off.
+#
+# Standing in the way is not the same as stopping. Whether ropes, a grip or a spell can hold this
+# particular person against what they are now doing is a question about the story, and the game has
+# no way to weigh it. So the attempt is neither applied nor refused: it goes to the story (ok is
+# None), which decides, and ends the state if they get past it. Only someone a state has taken out
+# of things altogether (state.unaware) is refused outright, since they cannot so much as try.
 NEEDS = {
     "move": "move", "use_item": "items", "transfer_item": "items", "equip": "equipment", "unequip": "equipment",
     "use_skill": "skills", "buy": "trade", "sell": "trade", "start_battle": "attack",
@@ -84,9 +91,14 @@ def apply_action(card, state, action, by_player=False):
     if state.get("battle") and action["type"] in ("move", "buy", "sell", "start_battle"):
         return {"action": action, "ok": False, "message": "Not in the middle of a fight."}
     if by_player and action["type"] in NEEDS:
-        stopped_by = blocked(card, state["actors"][PLAYER], NEEDS[action["type"]])
+        me = state["actors"][PLAYER]
+        stopped_by = blocked(card, me, NEEDS[action["type"]])
+        if stopped_by and unaware(card, me):
+            return {"action": action, "ok": False, "message": "%s cannot do that while %s." % (me["name"], stopped_by.lower())}
         if stopped_by:
-            return {"action": action, "ok": False, "message": "%s cannot do that while %s." % (state["actors"][PLAYER]["name"], stopped_by.lower())}
+            note = [held["note"] for held in me["states"].values() if held["name"] == stopped_by and held.get("note")]
+            return {"action": action, "ok": None, "message": "%s is %s%s and tries to %s all the same. Nothing has been done or changed yet. Whether this gets them past what holds them is yours to decide, by who they are, what they can do and what is holding them. If it does, tell it done and the state is over; if not, tell how it fails." % (
+                me["name"], stopped_by.lower(), " (%s)" % note[0] if note else "", _attempt(card, state, action))}
     if by_player and action["type"] == "move":
         try:
             wanted = _find(places(card, state), action.get("location"), "location")[0]
@@ -144,6 +156,20 @@ def apply_action(card, state, action, by_player=False):
     except Rejected as e:
         return {"action": action, "ok": False, "message": str(e)}
     return {"action": action, "ok": True, "message": message}
+
+
+_ATTEMPTS = {"move": ("go to %s", "location"), "use_item": ("use %s", "item"), "transfer_item": ("hand over %s", "item"), "equip": ("put on %s", "item"),
+             "unequip": ("take off what they wear (%s)", "slot"), "use_skill": ("use %s", "skill"), "buy": ("buy %s", "item"), "sell": ("sell %s", "item"),
+             "start_battle": ("attack %s", "enemies")}
+
+
+def _attempt(card, state, action):
+    """What the player is trying, in a few words, for the story to be told of it."""
+    words, key = _ATTEMPTS[action["type"]]
+    named = action.get(key)
+    known = {"location": places(card, state), "item": all_items(card, state), "skill": card.skills, "enemies": state["actors"]}.get(key, {})
+    names = [known[ref]["name"] if isinstance(ref, str) and ref in known else str(ref) for ref in (named if isinstance(named, list) else [named])]
+    return words % ", ".join(names)
 
 
 def shop_price(card, state, shop_id, item_id):

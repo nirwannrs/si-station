@@ -225,7 +225,10 @@ screen hud(start="inventory"):
                     if card.has("levels"):
                         text esc(level_line()) size 26
                     if card.has("states") and me["states"]:
-                        text esc(aig_state.describe_states(me)) size 26 color "#ffb070"
+                        ## One line per state, each with a way to take it off, as for the other characters.
+                        for state_id, held in sorted(me["states"].items()):
+                            text esc(held["name"] + (" (%s)" % held["note"] if held.get("note") else "")) size 26 color "#ffb070"
+                            textbutton _("Remove") action Confirm(_("Remove this state? Use it when the story has moved on and the state was left behind."), Function(drop_state, "player", state_id)) text_size 20
                     for stat in card.data["rules"]["stats"]:
                         text esc(stat_line(stat))
                     if card.has("money"):
@@ -400,10 +403,13 @@ screen hud(start="inventory"):
                             if not shops:
                                 text _("There is no shop here.")
 
-            ## A result the engine left to the story (ok is None) is a note for the narrator, not news for the player.
+            ## A result the engine left to the story (ok is None) is a note for the narrator, not news for
+            ## the player. They are only told that the button did not settle it, and what to do about that.
             if game_state["pending_results"] and game_state["pending_results"][-1]["ok"] is not None:
                 $ result = game_state["pending_results"][-1]
                 text esc(result["message"]) size 24 color ("#9fd89f" if result["ok"] else "#ff8080")
+            elif game_state["pending_results"]:
+                text _("That is for the story to decide. Say what you do in your next message.") size 24 color "#ffd28a"
 
         textbutton _("Close") action Hide("hud") xalign 1.0 yalign 1.0
 

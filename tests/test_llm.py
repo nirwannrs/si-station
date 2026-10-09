@@ -416,7 +416,9 @@ class StatesPromptTest(unittest.TestCase):
                                     {"type": "set_state", "who": "tobin", "state": "blindfolded", "stops": ["sight"]}])
         text = prompt.describe_state(card, state)
         self.assertIn("cannot speak: whatever they try to say comes out as muffled or wordless sound, and nobody makes out the words (mouth shut)", text)
-        self.assertIn("tell the attempt and how it fails, never the thing done", text)
+        self.assertIn("which their own attempt can do only if they truly have the means", text)
+        self.assertIn("you decide whether it gets them past what holds them", prompt.action_protocol(card))
+        self.assertIn("is not yet a state", prompt.action_protocol(card))
         self.assertEqual(state["actors"]["player"]["states"]["mouth_shut"]["stops"], ["speech"])    # what is not a real limit is dropped
         notes = prompt.sense_notes(card, state)                                                     # how the player's own message lands this turn
         self.assertEqual([n["ok"] for n in notes], [None])

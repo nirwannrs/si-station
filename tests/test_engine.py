@@ -239,7 +239,9 @@ class EngineTest(unittest.TestCase):
         self.ok(type="set_state", state="Hands bound", note="rope at the wrists", stops=["items", "equipment", "attack"])
         self.assertEqual(limits(self.card, self.me), [("items", "Hands bound"), ("equipment", "Hands bound"), ("attack", "Hands bound")])
         held = apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)
-        self.assertEqual((held["ok"], held["message"]), (False, "Traveler cannot do that while hands bound."))
+        self.assertIsNone(held["ok"])                                                               # in the way, and for the story to weigh
+        self.assertIn("Traveler is hands bound (rope at the wrists) and tries to use Healing Draught all the same.", held["message"])
+        self.assertEqual(self.me["inventory"]["healing_draught"], 1)
         self.assertTrue(apply_action(self.card, self.state, {"type": "move", "location": "stable"}, by_player=True)["ok"])   # not their legs
         self.ok(type="set_state", state="hands bound", note="the knots pulled tighter")              # said again without stops: it still holds
         self.assertEqual(self.me["states"]["hands_bound"]["stops"], ["items", "equipment", "attack"])
@@ -777,7 +779,16 @@ class StatesTest(unittest.TestCase):
         for action in [dict(type="move", location="stable"), dict(type="use_item", item="healing_draught"), dict(type="unequip", slot="body"),
                        dict(type="use_skill", skill="field_dressing"), dict(type="buy", shop="lantern_bar", item="stew"),
                        dict(type="transfer_item", item="belt_knife", **{"from": "player", "to": "mira"}), dict(type="start_battle", enemies=["mira"])]:
-            self.assertEqual(self.player(**action)["message"], "Traveler cannot do that while restrained.", action)
+            tried = self.player(**action)
+            self.assertIsNone(tried["ok"], action)                                              # neither done nor refused: the story weighs it
+            self.assertIn("Traveler is restrained (tied to a chair by Mira) and tries to ", tried["message"])
+            self.assertIn("Whether this gets them past what holds them is yours to decide", tried["message"])
+        self.assertIn("tries to go to Stable all the same", self.player(type="move", location="stable")["message"])
+        self.assertEqual((self.me["location"], self.me["inventory"]["healing_draught"], "restrained" in self.me["states"]), ("common_room", 1, True))   # nothing was done
+        # Someone a state has taken out of things altogether cannot so much as try.
+        self.world(type="set_state", state="unconscious")
+        self.assertEqual(self.player(type="move", location="stable"), {"action": {"type": "move", "location": "stable"}, "ok": False, "message": "Traveler cannot do that while restrained."})
+        self.world(type="clear_state", state="unconscious")
         # the story can still move them, and free them
         self.assertTrue(self.world(type="move", location="cellar")["ok"])
         self.assertEqual(self.world(type="clear_state", state="Restrained")["message"], "Traveler is no longer restrained.")
@@ -788,8 +799,8 @@ class StatesTest(unittest.TestCase):
         self.card.data["states"] = [{"id": "hobbled", "name": "Hobbled", "blocks": ["move"]}]
         self.card.states["hobbled"] = self.card.data["states"][0]
         self.world(type="set_state", state="hobbled")
-        self.assertFalse(self.player(type="move", location="stable")["ok"])
-        self.assertTrue(self.player(type="use_item", item="healing_draught")["ok"])           # only movement is blocked
+        self.assertIsNone(self.player(type="move", location="stable")["ok"])
+        self.assertTrue(self.player(type="use_item", item="healing_draught")["ok"])           # only movement is in the way
         self.assertEqual(self.world(type="set_state", who="mira", state="Slightly Drunk")["message"], "Mira Oakhand is now slightly drunk.")
         self.assertEqual(self.mira["states"], {"slightly_drunk": {"name": "Slightly drunk", "note": ""}})
         self.assertTrue(self.world(type="clear_state", who="mira", state="slightly drunk")["ok"])

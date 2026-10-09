@@ -71,6 +71,19 @@ def blocked(card, actor, capability):
     return None
 
 
+def unaware(card, actor):
+    """Whether a state has taken the actor out of things altogether: out of the scene, or able
+    neither to act nor to see or hear what goes on (asleep, unconscious). Someone like that cannot
+    even try. Any other state is a hold on someone who is still there to struggle against it."""
+    if not card.has("states"):
+        return False
+    for state_id, held in actor.get("states", {}).items():
+        stops = _stops(card, state_id, held)
+        if card.states.get(state_id, {}).get("away") or ("all" in stops and "sight" in stops and "hearing" in stops):
+            return True
+    return False
+
+
 def limits(card, actor):
     """Everything the actor's states stop, as (what, name of the state), in a steady order. "all"
     stands for every action, and the single actions it covers are then left out."""

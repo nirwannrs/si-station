@@ -109,6 +109,7 @@ def player_action_types(card):
 STATE_MEANING = """\
 A state is something that is true of a character for a while. It began at some point, it is still going on, and it will stay true over the coming turns until something in the story ends it. It can be of the body (asleep, wounded, poisoned, exhausted), of their situation (tied up, kidnapped, in hiding, away on an errand, in disguise) or of the mind (grieving, furious with {{user}}, smitten, terrified). States are how the story remembers what someone is in the middle of, so that three turns later the sleeper is still asleep, the prisoner is still gone and the one in mourning has not cheerfully forgotten.
 What someone does in a moment is not a state: charging at an opponent, shouting, drawing a sword, answering a question, a flash of annoyance. The test is whether it would still be true several turns from now if nothing changed it. If not, it is simply part of the story.
+A state that keeps someone from acting begins only once the text shows them actually unable to: a hold, a blow or a spell that is being tried, resisted or fought over is not yet a state.
 Someone can be in several states at once, and each is its own: a prisoner who is tied up, gagged and blindfolded is in three states, and taking the gag off ends one of them and leaves the other two. A state that has ended is removed; it is never kept on with a note saying it is over."""
 
 
@@ -126,8 +127,9 @@ def states_reference(card, record=True):
     ## A name of the model's own stops nothing, so someone "kidnapped" under one would still be standing in the room.
     leaving = [_named(state) for state in sorted(card.states.values(), key=lambda s: s["id"]) if state.get("away")]
     gone = (" When what happens takes someone out of the scene (kidnapped, carried off, sent away, lost), use %s for it and say what happened in the note; a name of your own would leave them standing in the room." % " or ".join(leaving)) if leaving else ""
-    duty = ("Keep them true: set a state when the story puts someone in it and clear it when the story ends it. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until you clear it."
-            if record else "Write everyone as being in the states they are in. The engine refuses what a state stops {{user}} from doing, so narrate {{user}} as held to it until the story ends it.")
+    held = ("What a state stops {{user}} from doing does not happen just because they say so. When they try, you are told, and you decide whether it gets them past what holds them, by who they are, what they can do and what is holding them."
+            " If it does, the state is over; until then they are held to it.")
+    duty = ("Keep them true: set a state when the story puts someone in it and clear it when the story ends it. " if record else "Write everyone as being in the states they are in. ") + held
     return """
 
 [States]
@@ -539,7 +541,7 @@ def _state_parts(card, actor):
     parts = ["State: %s" % describe_states(actor)]
     held = limits(card, actor)
     if held:
-        parts.append("So they %s. When they try any of it, tell the attempt and how it fails, never the thing done" % "; ".join(
+        parts.append("So they %s. This holds until something in the story ends it, which their own attempt can do only if they truly have the means" % "; ".join(
             "%s (%s)" % (LIMIT_MEANS[what], name.lower()) for what, name in held))
     return parts
 
