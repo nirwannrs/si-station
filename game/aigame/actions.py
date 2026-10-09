@@ -40,16 +40,21 @@ class Rejected(Exception):
     pass
 
 
-class NotTheirs(Rejected):
-    """The action names something the game does not have, or that the one acting does not have: no
-    such item, place, person or skill, or none of it in their hands.
+class NotTheGames(Rejected):
+    """The game has nothing to rule on here. What the action names is not there to act on (no such
+    item, place, person or skill, none of it in their hands, the other person somewhere else), or
+    there is nothing for it to change (already there, already worn), or it is not something the
+    game does with that thing (using what is only worn, wearing what is only carried).
 
     From the narrator this is a slip and is refused like any other. From the player it need not be
-    a slip at all. The helper that reads their message can only answer in game actions, so what
-    they do with something that is simply there in the scene, or by a means the card never
-    defined, arrives here named as the nearest thing the game knows. Refusing it would have the
-    story tell them failing at something that was never the game's to rule on. So it is left to
-    the story (see apply_action), with nothing changed."""
+    a slip at all. The helper that reads their message can only answer in game actions, so whatever
+    they do arrives named as the nearest thing the game knows, and where the people of the story
+    are is the story's to say before it is the game's. Refusing would have the story tell them
+    failing at something that was never the game's to rule on. So it is left to the story (see
+    apply_action), with nothing changed.
+
+    What the game does keep count of, it still rules on for everyone: money, how many of a thing,
+    what a skill costs and whether it is unlocked, what a shop stocks."""
 
 
 def apply_actions(card, state, actions, by_player=False):
@@ -146,7 +151,7 @@ def apply_action(card, state, action, by_player=False):
         return {"action": action, "ok": False, "message": "This game does not use inventory."}
     try:
         message = handler(card, state, action)
-    except NotTheirs as e:
+    except NotTheGames as e:
         if not by_player:
             return {"action": action, "ok": False, "message": str(e)}
         return {"action": action, "ok": None, "message": "%s So nothing the game tracks was used or changed by this. If what %s is doing is with something simply there in the scene, or by a means the game does not track, tell it as the story has it. If it could only be the thing named, it fails for that reason." % (
@@ -203,7 +208,7 @@ def _find(index, ref, what):
         for key, value in index.items():
             if plain and plain in (_plain(key), _plain(key[4:] if key.startswith("gen_") else key), _plain(str(value.get("name", value.get("title", ""))))):
                 return key, value
-    raise NotTheirs("There is no %s called %r." % (what, ref))
+    raise NotTheGames("There is no %s called %r." % (what, ref))
 
 
 def _who(state, action, key="who"):
@@ -243,7 +248,7 @@ def _count(item, qty):
 def _need(actor, item_id, item, qty):
     held = actor["inventory"].get(item_id, 0)
     if held == 0:
-        raise NotTheirs("%s does not have %s." % (actor["name"], item["name"]))
+        raise NotTheGames("%s does not have %s." % (actor["name"], item["name"]))
     if held < qty:
         raise Rejected("%s only has %d %s." % (actor["name"], held, item["name"]))
 
@@ -284,7 +289,7 @@ def _use_item(card, state, a):
     tid, target = _who(state, a, "target") if "target" in a else (wid, who)
     _need(who, iid, item, 1)
     if item["type"] == "equipment":
-        raise Rejected("%s is equipment. Equip it instead of using it." % item["name"])
+        raise NotTheGames("%s is equipment. Equip it instead of using it." % item["name"])
     if item["type"] != "consumable":
         return "%s uses %s. It is not used up." % (who["name"], item["name"])
     _take(who, iid, 1)
@@ -297,14 +302,14 @@ def _equip(card, state, a):
     wid, who = _who(state, a)
     iid, item = _item(card, state, a)
     if iid in who["equipment"].values():
-        raise Rejected("%s already has %s equipped." % (who["name"], item["name"]))
+        raise NotTheGames("%s already has %s equipped." % (who["name"], item["name"]))
     _need(who, iid, item, 1)
     if item["type"] == "misc" and item.get("generated") and a.get("slot") in SLOTS and card.has("equipment"):
         # A plain thing the story made and never said could be worn. Whoever puts it on says where
         # it goes, and from then on it is equipment. It has no effects, so nothing is gained by it.
         _reshape(card, state, item, {"type": "equipment", "slot": a["slot"]})
     if item["type"] != "equipment":
-        raise Rejected("%s cannot be equipped." % item["name"])
+        raise NotTheGames("%s cannot be equipped." % item["name"])
     slot = item["slot"]
     previous = who["equipment"].get(slot)
     _take(who, iid, 1)
@@ -322,12 +327,12 @@ def _unequip(card, state, a):
         iid, item = _item(card, state, a)
         slot = dict((worn, s) for s, worn in who["equipment"].items()).get(iid)
         if slot is None:
-            raise Rejected("%s does not have %s equipped." % (who["name"], item["name"]))
+            raise NotTheGames("%s does not have %s equipped." % (who["name"], item["name"]))
     if slot not in SLOTS:
         raise Rejected("There is no equipment slot called %r." % (slot,))
     iid = who["equipment"].get(slot)
     if not iid:
-        raise Rejected("%s has nothing equipped on %s." % (who["name"], slot))
+        raise NotTheGames("%s has nothing equipped on %s." % (who["name"], slot))
     del who["equipment"][slot]
     _give(who, iid, 1)
     return "%s takes off %s." % (who["name"], all_items(card, state)[iid]["name"])
@@ -341,7 +346,7 @@ def _transfer_item(card, state, a):
     if fid == tid:
         raise Rejected("%s cannot give an item to themselves." % giver["name"])
     if not together(card, giver, taker):
-        raise Rejected("%s and %s are not in the same place." % (giver["name"], taker["name"]))
+        raise NotTheGames("%s and %s are not in the same place." % (giver["name"], taker["name"]))
     _shed(giver, iid, qty)
     _need(giver, iid, item, qty)
     _take(giver, iid, qty)
@@ -496,7 +501,7 @@ def _shop(card, state, a):
     sid, shop = _find(card.shops, a.get("shop"), "shop")
     player = state["actors"][PLAYER]
     if shop.get("location") and player["location"] != shop["location"]:
-        raise Rejected("%s is not at %s." % (player["name"], shop["name"]))
+        raise NotTheGames("%s is not at %s." % (player["name"], shop["name"]))
     return sid, shop, player
 
 
@@ -584,7 +589,7 @@ def _move(card, state, a):
     lid, location = _find(places(card, state), a.get("location"), "location")
     here = places(card, state).get(who["location"])
     if here and lid == here["id"]:
-        raise Rejected("%s is already at %s." % (who["name"], location["name"]))
+        raise NotTheGames("%s is already at %s." % (who["name"], location["name"]))
     who["location"] = lid
     if here:
         left_place(state, here["id"])
@@ -764,7 +769,7 @@ def _use_skill(card, state, a):
     sid, skill = _find(card.skills, a.get("skill"), "skill")
     known = who["skills"].get(sid)
     if not known:
-        raise NotTheirs("%s does not know %s." % (who["name"], skill["name"]))
+        raise NotTheGames("%s does not know %s." % (who["name"], skill["name"]))
     if not known["unlocked"]:
         raise Rejected("%s has not unlocked %s yet." % (who["name"], skill["name"]))
     if skill.get("target", "other") == "self":
@@ -774,7 +779,7 @@ def _use_skill(card, state, a):
     else:
         tid, target = _who(state, a, "target")
         if not together(card, who, target):
-            raise Rejected("%s and %s are not in the same place." % (who["name"], target["name"]))
+            raise NotTheGames("%s and %s are not in the same place." % (who["name"], target["name"]))
     for stat_id, cost in skill.get("cost", {}).items():
         if who["stats"].get(stat_id, 0) < cost:
             raise Rejected("%s does not have enough %s for %s (needs %s, has %s)." % (
@@ -927,7 +932,7 @@ def _start_battle(card, state, a):
         if enemy["stats"].get(health, 0) <= 0:
             raise Rejected("%s is in no state to fight." % enemy["name"])
         if not together(card, enemy, player):
-            raise Rejected("%s is not here." % enemy["name"])
+            raise NotTheGames("%s is not here." % enemy["name"])
         if eid not in enemies:
             enemies.append(eid)
     for eid in enemies:

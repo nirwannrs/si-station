@@ -271,6 +271,18 @@ class EngineTest(unittest.TestCase):
             self.assertIsNone(left["ok"], "%s: %s" % (attempt, left["message"]))
             self.assertIn("nothing the game tracks was used or changed", left["message"])
             self.assertFalse(apply_action(self.card, self.state, attempt)["ok"], attempt)          # the narrator's own slip is still refused
+        # Nor does it rule where there is nothing to change, where the other person is by the game's
+        # reckoning somewhere else, or on a use the game does not have for a thing.
+        for attempt in ({"type": "move", "location": "common_room"},              # already there
+                        {"type": "equip", "item": "travel_cloak"},                 # already worn
+                        {"type": "use_item", "item": "travel_cloak"},              # worn, not used up
+                        {"type": "equip", "item": "healing_draught"},              # carried, not worn
+                        {"type": "unequip", "slot": "head"},                       # nothing there
+                        {"type": "transfer_item", "item": "belt_knife", "to": "tobin"},      # he is in the stable
+                        {"type": "use_skill", "skill": "quick_strike", "target": "tobin"}):
+            left = apply_action(self.card, self.state, attempt, by_player=True)
+            self.assertIsNone(left["ok"], "%s: %s" % (attempt, left["message"]))
+            self.assertFalse(apply_action(self.card, self.state, attempt)["ok"], attempt)
         self.assertEqual(self.state, before)
         self.assertTrue(apply_action(self.card, self.state, {"type": "use_item", "item": "healing_draught"}, by_player=True)["ok"])
         # What the game does have, it still rules on: too little money, more than they hold.
