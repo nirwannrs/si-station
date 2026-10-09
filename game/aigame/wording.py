@@ -306,7 +306,7 @@ Go through these every time:
 
 Rules:
 - Record only what the text shows has actually happened by its end. What is promised, offered, planned, expected, threatened, remembered or only talked about has not happened: record nothing for it, and it will be recorded when a later text shows it happen.
-- The engine results listed for this turn are already recorded. Do not record them again.
+- Everything is recorded once. The engine results for this turn and what the last turns recorded are in the game state already: check a gain or a loss against the game state first, and record nothing for a text that only speaks again of what is there.
 - Use the exact ids from the game state. If the text names something that has no id, use the closest action that fits, or leave it out.
 - When nothing changed, the list is empty. That is a normal answer.{{states}}
 
@@ -457,6 +457,7 @@ _sends("record_changes", _HELPER,
        ("[Active quests]", "open quests and objectives; only when no quest judge is deciding them", "The card's quests, and the save for how far each has got.", "card:quests"),
        ("[Quest rewards the game has already paid]", "the reward of a quest finished in the last few turns, so the story handing it over is not recorded as a second one; only when there is one", "The game: it pays a quest's reward the moment the quest is finished. The rewards are the card's.", "card:quests"),
        ("[Time and place, for reference]", "the story's time and place line before this reply and with it, to judge how much time passed; only when the player has that line on", "The story model: it writes the line at the head of each reply (The time and place line). Helpers only read it.", "preset:story/narrator_header"),
+       ("[Recorded in the last turns]", "what the game recorded over the last three turns, so the same change is not recorded twice when the story returns to it; only when there is any", "The save: the results kept with each turn, from the player's own actions and from this same job.", None),
        ("[Just before, already recorded; for context only]", "the end of the last two replies", "The save: the last 600 characters of each of the two replies before this one.", None),
        ("[Player's message]", "what the player just typed", "The player, this turn.", None),
        ("[Engine results already recorded this turn]", "what the game already applied, so it is not recorded twice; only when there is any", "The game: what it did with the player's own actions this turn, after Understand what the player does listed them.", "preset:helpers/resolve_actions"),

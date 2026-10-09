@@ -165,6 +165,9 @@ def action_protocol(card, record=True, prompts=None):
 
 # The bookkeeper: a helper that turns the narrator's prose into recorded changes.
 
+RECORD_MEMORY, RECORD_LINES = 3, 20       # how many turns back the bookkeeper is shown what was recorded, and at most how many lines of it
+
+
 def bookkeeper_prompt(card, state, player_text, results, narration, quests=True, prompts=None, clock=None):
     """state is the game as it stands after the player's own actions were applied. quests is False
     when a separate quest judge is deciding quest progress, so the bookkeeper leaves quests alone."""
@@ -203,9 +206,16 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
         "Before this text: %s\n" % before.strip("[] ") if before else "", "With this text: %s\n" % now.strip("[] ") if now else "") if before or now else ""
     already = "\n[Engine results already recorded this turn]\n%s\n" % _results_text(results) if results else ""
     earlier = "\n\n".join(t["narration"][-600:] for t in state["history"][-2:])
+    ## What the last turns recorded, so that a text which only returns to it (the keys just handed
+    ## over are counted, asked about, explained) is not taken for a second handing over.
+    lately = []
+    for turn in state["history"][-RECORD_MEMORY:]:
+        lately += [r["message"] for r in turn.get("results", []) if r.get("ok") is True and r["message"] not in lately]
+    recorded = ("[Recorded in the last turns]\n%s\nAll of this is in the game state already. Where the new text only returns to one of these, nothing new has happened: record nothing for it.\n\n" % "\n".join(
+        "- " + line for line in lately[-RECORD_LINES:])) if lately else ""
     user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
         describe_state(card, state, focus="%s\n%s" % (player_text, narration)), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
-        rewards + times + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
+        rewards + times + recorded + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
 

@@ -299,6 +299,25 @@ class PromptFollowsFeaturesTest(unittest.TestCase):
         self.assertNotIn("<actions>", system + messages[-1]["content"])
 
 
+class RecordedOnceTest(unittest.TestCase):
+    def test_the_bookkeeper_is_shown_what_was_just_recorded(self):
+        """A reply that returns to something already handed over must not be read as a second
+        handing over, so the bookkeeper sees what the last turns recorded."""
+        card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(card)
+        gave = {"ok": True, "message": "Traveler gets Room Key x2."}
+        state["history"] = [{"player": "a", "narration": "b", "results": [{"ok": True, "message": "Old news."}]}] + [
+            {"player": "a", "narration": "b", "results": [gave, {"ok": False, "message": "Refused."}, {"ok": None, "message": "Left to the story."}]}, {"player": "a", "narration": "b", "results": [gave]},
+            {"player": "a", "narration": "b", "results": []}]
+        system, messages = prompt.bookkeeper_prompt(card, state, "Why two keys?", [], "\"One is a spare,\" she says.")
+        sent = messages[0]["content"]
+        self.assertIn("[Recorded in the last turns]\n- Traveler gets Room Key x2.\nAll of this is in the game state already.", sent)   # once, and only what was done
+        self.assertNotIn("Old news.", sent)                                                                                            # only the last few turns
+        self.assertIn("Everything is recorded once.", system)
+        state["history"] = []
+        self.assertNotIn("[Recorded in the last turns]", prompt.bookkeeper_prompt(card, state, "x", [], "y")[1][0]["content"])
+
+
 class CastTest(unittest.TestCase):
     """Everyone who has entered the story keeps one line, sent every turn. The rest of what the
     card says of someone is sent only while they are in play."""
@@ -984,7 +1003,7 @@ class BookkeeperTest(unittest.TestCase):
         system, messages = prompt.bookkeeper_prompt(self.card, self.state, "I land and cast a light.", results,
                                                     "You touch down in the yard. A cold flicker of marsh-light leaves your fingers.")
         for part in ["bookkeeper", '"type": "change_stat"', '"type": "clear_state"', '"type": "move"', "Costs and harm", "go through every state the game state lists",
-                     "the player ends the text somewhere other", "Do not record them again", "Restrained (restrained)", 'Reply with JSON only: {"actions": [ ... ]}']:
+                     "the player ends the text somewhere other", "Everything is recorded once", "Restrained (restrained)", 'Reply with JSON only: {"actions": [ ... ]}']:
             self.assertIn(part, system, part)
         self.assertNotIn("{{user}}", system)
         user = messages[0]["content"]
