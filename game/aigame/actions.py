@@ -114,8 +114,6 @@ def apply_action(card, state, action, by_player=False):
         if wanted is not None and state.get("travel_lock") is not None:
             return {"action": action, "ok": None, "message": "%s is held where they are (%s) and tries to go to %s all the same. Whether they manage it, by what means, and what comes of it is for the story to decide." % (
                 who, state["travel_lock"].rstrip("."), places(card, state)[wanted]["name"])}
-        if wanted is None and state.get("travel_lock") is not None:
-            return {"action": action, "ok": False, "message": "%s cannot leave right now: %s" % (who, state["travel_lock"])}
         if wanted is not None and not knows_place(state, wanted):
             return {"action": action, "ok": None, "message": "%s means to go to %s, which is not on their map: they have not been shown it or the way there. Whether they get there, by what means, and what comes of it is for the story to decide." % (
                 who, places(card, state)[wanted]["name"])}
@@ -902,7 +900,7 @@ def _reveal_location(card, state, a):
 def _lock_travel(card, state, a):
     reason = a.get("reason") if isinstance(a.get("reason"), str) and a["reason"].strip() else "something is keeping them here."
     state["travel_lock"] = reason.strip()[:200]
-    return "%s can no longer leave: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])
+    return "%s cannot simply walk out now: %s" % (state["actors"][PLAYER]["name"], state["travel_lock"])
 
 
 def _unlock_travel(card, state, a):

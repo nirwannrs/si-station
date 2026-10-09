@@ -122,7 +122,9 @@ init python:
         """The map's Go button. Travelling is part of the story, so it is played as a turn at once
         and the narrator gets to say what leaving means, instead of the scene carrying on regardless."""
         do_action(type="move", location=location_id)
-        if not store.game_state["pending_results"][-1]["ok"]:
+        ## Refused outright: nothing to play. Left to the story (ok is None, when something stands in
+        ## the way): the turn is played, and the story says whether they get there.
+        if store.game_state["pending_results"][-1]["ok"] is False:
             return None
         renpy.hide_screen("hud")
         store.skip_resolve = True
@@ -323,7 +325,8 @@ screen hud(start="inventory"):
 
                         elif tab == "map":
                             if game_state["travel_lock"] is not None:
-                                text esc("You cannot leave right now: " + game_state["travel_lock"]) color "#ffb070"
+                                text esc("Something stands in the way of leaving: " + game_state["travel_lock"]) color "#ffb070"
+                                text _("You can still try. Whether you get away is for the story to decide.") size 22 color "#aaaaaa"
                                 null height 6
                             for place in [l for l in aig_state.place_list(card, game_state) if aig_state.knows_place(game_state, l["id"])]:
                                 hbox:
@@ -332,8 +335,7 @@ screen hud(start="inventory"):
                                         text esc(place["name"] + " (you are here)") yalign 0.5
                                     elif place["id"] in exit_ids():
                                         text esc(place["name"]) yalign 0.5
-                                        if game_state["travel_lock"] is None:
-                                            textbutton _("Go") action Function(go_to, place["id"])
+                                        textbutton (_("Go") if game_state["travel_lock"] is None else _("Try to go")) action Function(go_to, place["id"])
                                     else:
                                         text esc(place["name"]) color "#888888" yalign 0.5
                                 $ ways = [aig_state.places(card, game_state)[i]["name"] for i in exit_ids(place["id"])]

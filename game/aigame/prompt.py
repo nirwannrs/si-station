@@ -85,7 +85,7 @@ NARRATOR_ACTIONS = (
     ("map", '{"type": "move", "who": WHO, "location": LOCATION_ID}  someone has arrived in another location by the end of the text, by any means: walking, a portal, a carriage, being carried. Any location can be reached this way, not only neighbouring ones. Use one for each person who went. Only for an arrival: a plan to go, an agreement to go, or a journey begun but not finished moves nobody'),
     ("new_places", '{"type": "create_location", "name": "...", "description": "...", "temporary": false}  the story has taken someone to a place that is not in the location list at all. Create it, then move them there using its name. Set temporary to true for a place that ceases to exist once everyone has left it (a pocket dimension, a dream, a sinking ship)'),
     ("map", '{"type": "reveal_location", "location": LOCATION_ID}  {{user}} learns that one of the places they do not know of exists and how to reach it: someone tells them, they find a map, they notice the door. It then appears on their map'),
-    ("map", '{"type": "lock_travel", "reason": "..."}  {{user}} cannot leave this place for now; the game closes the map to them. The reason is one short sentence the player will see'),
+    ("map", '{"type": "lock_travel", "reason": "..."}  {{user}} cannot simply walk out of this place for now. The reason is what stands in the way, in one short sentence the player will see'),
     ("map", '{"type": "unlock_travel"}  {{user}} is free to travel again'),
     ("quests", '{"type": "quest_start", "quest": QUEST_ID}'),
     ("quests", '{"type": "quest_advance", "quest": QUEST_ID, "stage": OBJECTIVE_ID}  the quest\'s current objective, named by its id, is now completely finished: every part of it has happened and is over. Never for an objective that has only begun or is going well'),
@@ -689,7 +689,7 @@ def describe_state(card, state, secrets=True, focus=None, cast=None, items=True)
         lines.append("Places the player does not know of yet (not on their map; reveal one with reveal_location when the story shows it to them): %s" % "; ".join(
             "%s%s" % (_named(l), ": " + l["description"] if l.get("description") else "") for l in _unknown_places(card, state, focus)))
     if state.get("travel_lock") is not None:
-        lines.append("Travel: LOCKED for the player (%s) Use unlock_travel once nothing holds them." % state["travel_lock"])
+        lines.append("Travel: the player cannot simply walk out (%s) Use unlock_travel once nothing holds them." % state["travel_lock"])
     lines += _sheet(card, state, PLAYER)
 
     present, elsewhere = [], []

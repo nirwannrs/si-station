@@ -493,14 +493,16 @@ class LeavingTest(unittest.TestCase):
         card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
         state = new_game(card)
         self.assertEqual(apply_actions(card, state, [{"type": "lock_travel", "reason": "The exam has begun and the captains are watching."}])[0]["message"],
-                         "Traveler can no longer leave: The exam has begun and the captains are watching.")
+                         "Traveler cannot simply walk out now: The exam has begun and the captains are watching.")
         tried = apply_actions(card, state, [{"type": "move", "location": "stable"}], by_player=True)[0]
         # Asked for after play: a teleporter, or someone who simply will not stay, is not stopped by the
         # game. The map stays closed to walking, and the attempt is handed to the story with why they are held.
         self.assertIsNone(tried["ok"])
         self.assertIn("is held where they are (The exam has begun and the captains are watching) and tries to go to Stable all the same", tried["message"])
         self.assertEqual(state["actors"]["player"]["location"], "common_room")
-        self.assertIn("Travel: LOCKED for the player (The exam has begun and the captains are watching.)", prompt.describe_state(card, state))
+        self.assertIn("Travel: the player cannot simply walk out (The exam has begun and the captains are watching.)", prompt.describe_state(card, state))
+        nowhere = apply_actions(card, state, [{"type": "move", "location": "a clearing far from here"}], by_player=True)[0]
+        self.assertIsNone(nowhere["ok"], nowhere["message"])                                                               # a way out of their own, to a place the map does not have: the story's to weigh too
         moved = apply_actions(card, state, [{"type": "move", "who": "player", "location": "cellar"}])[0]                    # the story can still move them
         self.assertTrue(moved["ok"])
         self.assertIsNone(state["travel_lock"])                                                                             # and what held them there holds them no longer
@@ -511,7 +513,7 @@ class LeavingTest(unittest.TestCase):
         self.assertFalse(apply_actions(card, state, [{"type": "unlock_travel"}])[0]["ok"])
         self.assertTrue(apply_actions(card, state, [{"type": "move", "location": "common_room"}], by_player=True)[0]["ok"])
         self.assertNotIn("Travel:", prompt.describe_state(card, state))
-        self.assertEqual(apply_actions(card, state, [{"type": "lock_travel"}])[0]["message"], "Traveler can no longer leave: something is keeping them here.")
+        self.assertEqual(apply_actions(card, state, [{"type": "lock_travel"}])[0]["message"], "Traveler cannot simply walk out now: something is keeping them here.")
         for part in ["lock_travel", "unlock_travel", "Never leave it locked"]:
             self.assertIn(part, prompt.action_protocol(card))
         # the player cannot lift it by saying so
