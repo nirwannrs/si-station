@@ -28,6 +28,8 @@ init python:
         stored = ""
         garbled = set()         # kinds of request the pretend model answers uselessly, to test failures
         asked = []              # every kind of request it has had
+        say = {}                # words in an instruction -> the answer the pretend model gives to a request that has them
+        turns = 0               # how many turns had been played when the game was saved
 
     selftest = SelfTest()
 
@@ -62,9 +64,12 @@ init python:
                 asked = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 system = asked["messages"][0]["content"]
                 kind = "bookkeeper" if "bookkeeper of" in system else "narrator" if "You are the narrator" in system else "other"
-                selftest.asked.append(kind)
+                scripted = [marker for marker in selftest.say if marker in system]
+                selftest.asked.append(scripted[0] if scripted else kind)
                 if kind in selftest.garbled:
                     text = "I am sorry, I cannot produce that right now."
+                elif scripted:
+                    text = selftest.say[scripted[0]]
                 elif "You are the narrator" in system:
                     text = "Rain drums on the roof.\n\n\"Stew is one gold,\" Mira says."
                 elif "keep the journal" in system:
@@ -174,6 +179,64 @@ init python:
             return game_state["journal"][0]["title"]
         selftest_step("a journal entry is written on request", journal)
 
+        def story_led():
+            ## What the story may do beyond what the card defines, played through whole turns: make an
+            ## item to wear and a state that takes the player's voice, have the player do something
+            ## with a thing the game does not have, keep its own clock, and be reminded of old scenes.
+            import json, re
+            CLERK, BOOKS, STORY, CLOCK, MEMORY = "You are the rules clerk", "bookkeeper of", "You are the narrator", "You keep the clock", "You are the memory"
+            me = game_state["actors"]["player"]
+            params()["bookkeeper"] = True
+
+            def turn(text, **answers):
+                selftest.say.clear()
+                selftest.say.update(answers)
+                del selftest.asked[:]
+                open_turn()
+                play_turn(text)
+                selftest.say.clear()
+                assert turn_error is None, turn_error
+                return game_state["history"][-1]
+
+            def actions(*listed):
+                return json.dumps({"actions": list(listed), "verdicts": [], "start": []})
+
+            played = turn("I drink from the cup on the table.", **{
+                CLERK: actions({"type": "use_item", "item": "a cup of wine"}),
+                BOOKS: actions({"type": "create_item", "name": "Wool Scarf", "slot": "accessory"}, {"type": "set_state", "state": "gagged", "stops": ["speech"]}),
+                STORY: "[ 09:40 PM | Day 1 | Common Room ]\n\nRain drums on the roof."})
+            assert not [r for r in played["results"] if r["ok"] is False], "something the game does not have was refused: %s" % played["results"]
+            assert game_state["generated_items"]["gen_wool_scarf"]["slot"] == "accessory"
+            assert me["states"]["gagged"]["stops"] == ["speech"]
+            assert "09:40" in game_state["header"]
+
+            played = turn('"Can anyone hear me?" *I wave an arm*', **{
+                CLERK: actions({"type": "equip", "item": "gen_wool_scarf"}),
+                STORY: "[ 08:00 PM | Day 1 | Common Room ]\n\nMira looks up.",
+                CLOCK: json.dumps({"line": "[ 09:44 PM | Day 1 | Common Room ]", "player_at": None})})
+            assert me["equipment"].get("accessory") == "gen_wool_scarf"
+            assert played.get("heard") and "*I wave an arm*" in played["heard"] and not re.search(r"[aeiou]", played["heard"].split("*")[0].lower()), played.get("heard")
+            assert CLOCK in selftest.asked and "09:44" in game_state["header"], "the clock ran backwards and was not put right: %s" % game_state.get("header")
+            me["states"].clear()
+
+            ## Scenes that have left the story model's sight: the memory helper is asked which to send, and its words can be edited.
+            first = game_state["journal"][0]
+            game_state["journal"] += [dict(first, id=first["id"] + n, title="An older scene %d" % n) for n in range(1, 5)]
+            for entry in game_state["journal"]:
+                entry["start"], entry["end"] = 0, 1
+            kept = game_state.get("summarized", 0)
+            game_state["summarized"] = len(game_state["history"])
+            turn("I think back.", **{MEMORY: json.dumps({"scenes": [first["id"] + 2]}), STORY: "[ 09:50 PM | Day 1 | Common Room ]\n\nThe fire settles."})
+            assert MEMORY in selftest.asked, "the memory helper was not asked"
+            game_state["summarized"] = kept
+            del game_state["journal"][1:]
+            journal_open_editor(first["id"])
+            first["keys"] = "inn, hearth"
+            journal_close_editor(True)
+            assert first["keywords"] == ["inn", "hearth"] and "keys" not in first, first
+            return "worn: %s; heard as: %s; clock: %s" % (me["equipment"]["accessory"], played["heard"][:24], game_state["header"])
+        selftest_step("the story makes things, keeps its clock and is reminded of old scenes", story_led)
+
         def stays_quick():
             ## A text-only card with a long story behind it: typing a letter and turning the mouse
             ## wheel must not make the game draw the whole story again. Both once took a quarter of a
@@ -247,6 +310,7 @@ init python:
         def save():
             ## Named the way the save screen names a slot, so this is a save the player would see listed.
             selftest.slot = "%sselftest-1" % card_save_prefix()
+            selftest.turns = len(game_state["history"])
             renpy.save(selftest.slot)
             assert renpy.can_load(selftest.slot), "the save was not written"
             return "%s, remembering its card as %r" % (selftest.slot, store.card_name)
@@ -313,7 +377,9 @@ init python:
         def loaded():
             assert problem is None, problem
             assert store.card_name == selftest.stored, "the save still points at %r, not %r" % (store.card_name, selftest.stored)
-            assert len(game_state["history"]) == 2, "%d turns after loading" % len(game_state["history"])
+            assert len(game_state["history"]) == selftest.turns, "%d turns after loading, %d when saved" % (len(game_state["history"]), selftest.turns)
+            ## What the story made during play is kept in the save, not in the card, and must come back with it.
+            assert game_state["actors"]["player"]["equipment"].get("accessory") == "gen_wool_scarf" and "gen_wool_scarf" in game_state["generated_items"], "what the story made was lost on loading"
             assert current_card().id == game_state["card_id"]
             return "plays on with %r, %d turns" % (store.card_name, len(game_state["history"]))
         selftest_step("the save loads although its card is now a file", loaded)
