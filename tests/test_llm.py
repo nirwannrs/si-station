@@ -299,6 +299,26 @@ class PromptFollowsFeaturesTest(unittest.TestCase):
         self.assertNotIn("<actions>", system + messages[-1]["content"])
 
 
+class PrivateToThePlayerTest(unittest.TestCase):
+    def test_what_is_written_of_the_player_is_not_a_thread_for_others_to_pull(self):
+        """The story model is told who the player's character is and what lies behind the world.
+        Unframed, it has every character ask after it."""
+        card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))
+        state = new_game(card)
+        with open(os.path.join(ROOT, "presets", "default.preset.json")) as f:
+            preset = json.load(f)
+        system, messages = prompt.narrator_prompt(card, state, preset, "I wait.", [])
+        name = state["actors"]["player"]["name"]
+        self.assertIn("[The player's character]\nWho %s is, for you to keep them true to. It is theirs to bring up or not." % name, system)
+        self.assertIn("not theirs to sense, hint at or draw out.\nName: %s" % name, system)
+        self.assertIn("not by questioning %s." % name, system)
+        self.assertNotIn("let them ask", system)
+        card.data["lorebook"] = [{"id": "x", "content": "The mill burned years ago.", "always_on": True}]
+        tail = prompt.narrator_prompt(card, state, preset, "I wait.", [])[1][-1]["content"]
+        self.assertIn("[Background knowledge]\nFor you. A character knows of this only what someone in their place would.\n- The mill burned years ago.", tail)
+        self.assertNotIn("questions", prompt.summary_prompt(card, state, [], listed=True)[0])
+
+
 class StoryQuestsTest(unittest.TestCase):
     def test_a_quest_the_story_made_is_told_and_judged_with_the_cards_own(self):
         card = load_card(os.path.join(ROOT, "cards", "rusty_lantern"))

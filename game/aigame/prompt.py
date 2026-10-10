@@ -884,7 +884,7 @@ def describe_lore(card, recent_text):
     hits = [e for e in card.data.get("lorebook", [])
             if e.get("always_on") or any(k.lower() in low for k in e.get("keys", []))]
     hits.sort(key=lambda e: -e.get("priority", 0))
-    return "[Background knowledge]\n" + "\n".join("- " + e["content"] for e in hits) if hits else ""
+    return "[Background knowledge]\nFor you. A character knows of this only what someone in their place would.\n" + "\n".join("- " + e["content"] for e in hits) if hits else ""
 
 
 def _recent_text(card, state, player_text, turns=3):
@@ -953,7 +953,9 @@ def narrator_prompt(card, state, preset, player_text, results, record=True, chec
         "world": lambda: "[World]\n%s%s" % (world["description"], "\n\n[Situation at the start]\n" + world["scenario"] if world.get("scenario") else ""),
         ## The card's own guidance is told apart from the preset's and given the last word. See wording.py.
         "narrator_instructions": lambda: prompt_text(preset.get("prompts"), "card_instructions", instructions=own) if own else "",
-        "persona": lambda: "[The player's character]\nName: %s%s%s" % (
+        ## What is written of the player's character is there to keep them consistent. Left unframed, a
+        ## model takes a past it was told of as a thread to pull, and has everyone ask after it.
+        "persona": lambda: "[The player's character]\nWho {{user}} is, for you to keep them true to. It is theirs to bring up or not. The other characters know only what they can see of {{user}} and what the story has shown or told them; the rest is not theirs to sense, hint at or draw out.\nName: %s%s%s" % (
             me["name"], "\n" + me["description"] if me.get("description") else "",
             "\nAppearance: " + me["appearance"] if me.get("appearance") else ""),
         "characters": lambda: describe_cast(card, settled, heading="[Characters]\nEveryone who has entered the story, in a line each. Whoever is in play this turn is described in full with the scene.", full=False),

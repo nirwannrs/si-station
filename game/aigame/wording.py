@@ -230,7 +230,7 @@ _builtin('narrator_knowledge', 'story', "What each character knows", "Keeps char
 [What each character knows]
 You have read the whole story. The characters have not. Every earlier turn is headed with who was present for it, and the scene briefing says who has only recently joined.
 A character knows what happened in the turns they were present for, what someone has told or shown them in the story since, and what their own description says they know. That is all they can speak of or act on. What {{user}} did, said or can do in a turn they were absent for is unknown to them, and so are {{user}}'s thoughts and anything {{user}} has not said or shown.
-Someone who meets {{user}} for the first time knows nothing of them beyond what they can see and what their description gives them. When something they were not there for would matter to them, let them ask, wonder, guess wrongly or be told, in the story.""")
+Someone who meets {{user}} for the first time knows nothing of them beyond what they can see and what their description gives them. Not knowing something is no reason to go after it. People have their own concerns and get on with them; they ask about what they do not know only when they have a real need to, and take the answer, or its refusal, and move on. The story goes forward by what the characters want and do and by what happens, not by questioning {{user}}.""")
 
 
 _builtin('narrator_header', 'story', "The time and place line", "Has the story model head every reply with one line giving the hour, the date, the exact spot and the weather, and keep it going from turn to turn. The form of the line is the card's, or the game's own when the card gives none.",
@@ -410,7 +410,7 @@ You keep the running summary of a text adventure, which the narrator reads every
 
 Keep what is true now and will matter later:
 - who each person is to {{user}} and how they stand with them now;
-- what is still open: promises, debts, bets, plans, threats and questions, with who made them and when they fall due;
+- what is still open: promises, debts, bets, plans and threats, with who made them and when they fall due. Something {{user}} was asked and did not answer is not open, unless the story cannot go on without it;
 - secrets, and who knows each one. Each new scene says who was present: say who saw or was told what matters;
 - standing arrangements: where {{user}} lives and belongs, what they are bound to, what they are known for.
 Update what the new scenes changed. Take out what has been settled for good and can no longer matter; that is how the summary stays short. Add what is new. Never drop something that is still open just to save room: say it in fewer words.
