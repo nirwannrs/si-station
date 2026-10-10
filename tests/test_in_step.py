@@ -347,6 +347,7 @@ class ButtonFunctionsTest(unittest.TestCase):
         closing_is_the_point = {
             "go_to",                # travelling ends the input screen so the move is played as a turn
             "import_from_file",     # choosing a card ends the insert-card screen
+            "import_card_file",     # the same, once the player has agreed to replace the copy already there
         }
         sources = dict((name, read("game", name)) for name in os.listdir(os.path.join(ROOT, "game")) if name.endswith(".rpy"))
         everything = "\n".join(sources.values())

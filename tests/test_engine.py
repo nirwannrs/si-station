@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 
 from aigame import battle, prompt  # noqa: E402
 from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
-from aigame.card import Card, CardError, check_card, import_card, list_cards, load_card, pack_card  # noqa: E402
+from aigame.card import Card, CardError, check_card, copies_of, import_card, list_cards, load_card, pack_card  # noqa: E402
 from aigame.state import describe_states, effective_stat, limits, new_game, reconcile  # noqa: E402
 
 CARD_DIR = os.path.join(ROOT, "cards", "rusty_lantern")
@@ -88,6 +88,8 @@ class EngineTest(unittest.TestCase):
             shutil.copyfile(packed, os.path.join(library, "rusty lantern (1).sicard"))
             shutil.copytree(CARD_DIR, os.path.join(library, "my_lantern"))
             self.assertEqual(len(list_cards(library)), 3)
+            self.assertEqual(copies_of(packed, library), ("The Rusty Lantern", ["my_lantern", "rusty lantern (1).sicard", "rusty_lantern.sicard"]))   # what to ask about first
+            self.assertEqual(copies_of(os.path.join(library, "rusty_lantern.sicard"), library)[1], ["my_lantern", "rusty lantern (1).sicard"])
             del replaced[:]
             self.assertEqual(import_card(packed, library, replaced), "rusty_lantern.sicard")
             self.assertEqual(sorted(replaced), ["my_lantern", "rusty lantern (1).sicard", "rusty_lantern.sicard"])

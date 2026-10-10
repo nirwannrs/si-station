@@ -128,6 +128,15 @@ init python:
         done = subprocess.run(command, capture_output=True, text=True, creationflags=flags) if flags else subprocess.run(command, capture_output=True, text=True)
         return done.stdout.strip() or None
 
+    def import_card_file(path):
+        """Adds the chosen card file to the library, in place of any copy already there. Returns its library name, which inserts it."""
+        try:
+            return aig_card.import_card(path, cards_dir())
+        except (aig_card.CardError, IOError, OSError) as e:
+            runtime.import_message = "Could not import the card: %s" % (e.problems[0] if isinstance(e, aig_card.CardError) else e)
+        renpy.restart_interaction()
+        return None
+
     def import_from_file():
         """Asks for a card file and adds it to the library. Returns its library name, which inserts it, or None."""
         try:
@@ -138,12 +147,15 @@ init python:
         if not path:
             return None
         try:
-            replaced = []
-            name = aig_card.import_card(path, cards_dir(), replaced)
-            ## A library keeps one copy of a card. The player is told when importing took the place of one.
-            runtime.import_message = ("This card was already here, and the imported one has taken its place. The copy it replaced (%s) is in the cards folder, under .trash. "
-                                      "Saves made with it carry on with the new one." % ", ".join(replaced)) if replaced else None
-            return name
+            ## A library keeps one copy of a card, so importing one that is already here replaces it.
+            ## The player is asked first; what is replaced goes to the cards folder's .trash.
+            title, already = aig_card.copies_of(path, cards_dir())
+            if already:
+                renpy.show_screen("confirm", message="%s is already in your library.\nReplace it?" % esc(title),
+                                  yes_action=[Hide("confirm"), Function(import_card_file, path)], no_action=Hide("confirm"))
+                renpy.restart_interaction()
+                return None
+            return aig_card.import_card(path, cards_dir())
         except aig_card.CardError as e:
             runtime.import_message = "That file is not a usable card: " + e.problems[0]
         except (IOError, OSError) as e:

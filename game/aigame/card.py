@@ -243,6 +243,17 @@ def list_cards(library):
     return entries
 
 
+def copies_of(source, library):
+    """(the title of the card in a .sicard file, the names of what in the library is that same card),
+    for asking before an import takes their place. The file itself, if it is in the library, is not
+    counted. Raises CardError when the file is not a usable card."""
+    if os.path.isdir(source):
+        raise CardError(["Choose a %s file, not a folder." % EXTENSION])
+    card = load_card(source)
+    return card.title, [entry["name"] for entry in list_cards(library)
+                        if entry["card"] is not None and entry["card"].id == card.id and os.path.abspath(os.path.join(library, entry["name"])) != os.path.abspath(source)]
+
+
 def import_card(source, library, replaced=None):
     """Checks a .sicard file and copies it into the library. Returns the name it is stored under.
 
