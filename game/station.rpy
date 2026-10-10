@@ -56,8 +56,14 @@ label after_load:
         show screen story_panel
     return
 
+default persistent.played = None
+
 init python:
+    import datetime
+    import os
+    import re
     import subprocess
+    import time
 
     ## Saves are kept per card: the slot names carry the card's id, so the save and load screens
     ## only ever list the inserted card's saves.
@@ -129,39 +135,76 @@ init python:
         return done.stdout.strip() or None
 
     def import_card_file(path):
-        """Adds the chosen card file to the library, in place of any copy already there. Returns its library name, which inserts it."""
+        """Adds the chosen card file to the library, in place of any copy already there. The player
+        stays in the library, where the card now is, and chooses what to play."""
         try:
-            return aig_card.import_card(path, cards_dir())
+            name = aig_card.import_card(path, cards_dir())
+            runtime.import_message = None
+            runtime.import_note = "Added %s." % aig_card.get_card(os.path.join(cards_dir(), name)).title
         except (aig_card.CardError, IOError, OSError) as e:
+            runtime.import_note = None
             runtime.import_message = "Could not import the card: %s" % (e.problems[0] if isinstance(e, aig_card.CardError) else e)
         renpy.restart_interaction()
-        return None
 
     def import_from_file():
-        """Asks for a card file and adds it to the library. Returns its library name, which inserts it, or None."""
+        """Asks for a card file and adds it to the library."""
+        runtime.import_note = None
         try:
             path = pick_file()
         except Exception:
             runtime.import_message = "No file chooser is available here. Copy the card file into the folder below instead."
-            return None
+            return
         if not path:
-            return None
+            return
         try:
             ## A library keeps one copy of a card, so importing one that is already here replaces it.
             ## The player is asked first; what is replaced goes to the cards folder's .trash.
             title, already = aig_card.copies_of(path, cards_dir())
-            if already:
-                renpy.show_screen("confirm", message="%s is already in your library.\nReplace it?" % esc(title),
-                                  yes_action=[Hide("confirm"), Function(import_card_file, path)], no_action=Hide("confirm"))
-                renpy.restart_interaction()
-                return None
-            return aig_card.import_card(path, cards_dir())
         except aig_card.CardError as e:
             runtime.import_message = "That file is not a usable card: " + e.problems[0]
-        except (IOError, OSError) as e:
-            runtime.import_message = "Could not copy the card: %s" % e
-        renpy.restart_interaction()
-        return None
+            renpy.restart_interaction()
+            return
+        if already:
+            renpy.show_screen("confirm", message="%s is already in your library.\nReplace it?" % esc(title),
+                              yes_action=[Hide("confirm"), Function(import_card_file, path)], no_action=Hide("confirm"))
+            renpy.restart_interaction()
+        else:
+            import_card_file(path)
+
+    ## When each card was last played, for the library to put the latest first and say so. A card's
+    ## newest save tells it (they are named after the card), and so does a note the game keeps for
+    ## itself, for a player who saves nothing.
+
+    def mark_played():
+        if store.game_state and current_card() is not None:
+            played = dict(persistent.played or {})
+            played[current_card().id] = time.time()
+            persistent.played = played
+
+    def last_played(card):
+        """The time the card was last played, or None if it never was."""
+        times = [(persistent.played or {}).get(card.id)]
+        try:
+            times += [renpy.slot_mtime(slot) for slot in renpy.list_slots("^" + re.escape(card.id + "-"))]
+        except Exception:
+            pass
+        times = [t for t in times if t]
+        return max(times) if times else None
+
+    def played_words(when):
+        if not when:
+            return "Not played yet"
+        days = (datetime.date.today() - datetime.date.fromtimestamp(when)).days
+        clock = time.strftime("%H:%M", time.localtime(when))
+        return "Last played today, %s" % clock if days <= 0 else "Last played yesterday, %s" % clock if days == 1 else "Last played %s" % time.strftime("%d %b %Y", time.localtime(when)).lstrip("0")
+
+    def library_cards():
+        """The library as it is listed: the card played last first, cards never played after those
+        that were, by title, and files that cannot be used at the end. Each usable entry has "played"."""
+        entries = aig_card.list_cards(cards_dir())
+        for entry in entries:
+            entry["played"] = last_played(entry["card"]) if entry["card"] else None
+        return sorted(entries, key=lambda e: (e["card"] is None, -(e["played"] or 0), (e["card"].title if e["card"] else e["name"]).lower()))
 
 
 ## What the inserted card is, and what its creator wants players to know.
@@ -209,7 +252,7 @@ screen insert_card():
                 action SetScreenVariable("choosing", True)
 
     else:
-        $ library = aig_card.list_cards(cards_dir())
+        $ library = library_cards()
         vbox:
             xalign 0.5
             ypos 80
@@ -235,6 +278,7 @@ screen insert_card():
                                 vbox:
                                     $ meta = entry["card"].data["meta"]
                                     text esc(meta["title"]) size 40 color "#111111"
+                                    text esc(played_words(entry["played"])) size 22 color ("#0077aa" if entry["played"] else "#999999")
                                     if meta.get("author"):
                                         text esc("by " + meta["author"]) size 24 color "#777777"
                                     if meta.get("description"):
@@ -252,6 +296,8 @@ screen insert_card():
 
             if getattr(runtime, "import_message", None):
                 text esc(runtime.import_message) size 26 color "#aa3333"
+            elif getattr(runtime, "import_note", None):
+                text esc(runtime.import_note) size 26 color "#227744"
 
             hbox:
                 spacing 60

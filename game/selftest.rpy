@@ -337,6 +337,18 @@ init python:
             return "in the library as %r" % selftest.stored
         selftest_step("the card is exported and imported as a file", export_and_import)
 
+        def library():
+            ## The card just played heads the library and says when it was played; one never played says so.
+            listed = library_cards()
+            usable = [e for e in listed if e["card"]]
+            assert usable and usable[0]["card"].id == SELFTEST_CARD, "the card played last is not listed first: %s" % [e["name"] for e in listed]
+            assert played_words(usable[0]["played"]).startswith("Last played today, "), played_words(usable[0]["played"])
+            assert played_words(None) == "Not played yet" and all(e["played"] is None for e in usable[1:]), [(e["name"], e["played"]) for e in usable]
+            ## Importing puts a card in the library and leaves the choosing to the player.
+            assert import_card_file(os.path.join(cards_dir(), selftest.stored)) is None and runtime.import_note, runtime.import_message
+            return "%s: %s" % (usable[0]["card"].title, played_words(usable[0]["played"]))
+        selftest_step("the library lists the card played last first, with when", library)
+
         def creator_runs():
             import requests
             start_creator()

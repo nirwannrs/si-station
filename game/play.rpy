@@ -71,6 +71,7 @@ init python:
         store.game_state = aig_state.new_game(current_card(), persona)
         store.game_log = []
         store.battle_log = []
+        mark_played()
 
     from aigame import text as aig_text
 

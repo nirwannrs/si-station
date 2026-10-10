@@ -931,6 +931,7 @@ init python:
         state["history"].append(turn)
         state["cast"] = state.get("cast", []) + [c for c in entering if c not in state.get("cast", [])]
         state["turn"] += 1
+        mark_played()
         state["open"] = False
         ## What the turn started from becomes what Undo goes back to.
         before, state["restore_point"] = state["restore_point"], None
