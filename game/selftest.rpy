@@ -383,6 +383,38 @@ init python:
             return "imported as %r, used, removed" % name
         selftest_step("a shared preset is imported and used", preset_round_trip)
 
+        def providers():
+            ## Each provider keeps its own model for every job, its own address and its own key. The
+            ## test uses a connection of its own, so the player's real keys are never read or written.
+            settings, mine = llm_settings(), "selftest%d" % os.getpid()
+            settings["connections"].append({"id": mine, "provider": "local", "base_url": "http://127.0.0.1:1/v1", "api_key": ""})
+            was = dict(settings["models"]["utility"])
+            names = ["%s@%s" % (key_name(mine), provider) for provider in ("local", "nanogpt")] + [key_name(mine)]
+            try:
+                settings["models"]["utility"].update(connection=mine, model="small-local")
+                runtime.keys[mine], runtime.keys_stored[mine] = "local-key-1", ""
+                connection = llm_connection(mine)
+                switch_provider(connection, "nanogpt")
+                suggested = aig_llm.SUGGESTED_MODELS.get("nanogpt", {}).get("utility") or ""
+                assert (settings["models"]["utility"]["model"], connection["base_url"], runtime.keys[mine]) == (suggested, "", ""), "a new provider did not start clean: %r" % ((settings["models"]["utility"]["model"], connection["base_url"], runtime.keys[mine]),)
+                settings["models"]["utility"]["model"], connection["base_url"], runtime.keys[mine] = "small-nano", "https://example.invalid/v1", "nano-key-2"
+                switch_provider(connection, "local")
+                assert (settings["models"]["utility"]["model"], connection["base_url"], runtime.keys[mine]) == ("small-local", "http://127.0.0.1:1/v1", "local-key-1"), "going back did not bring back what was left"
+                switch_provider(connection, "nanogpt")
+                assert (settings["models"]["utility"]["model"], connection["base_url"], runtime.keys[mine]) == ("small-nano", "https://example.invalid/v1", "nano-key-2")
+                assert settings["models"]["main"]["model"] == "pretend", "a job on another connection was changed"
+            finally:
+                for name in names:
+                    aig_keystore.drop(name)
+                runtime.keys.pop(mine, None)
+                runtime.keys_stored.pop(mine, None)
+                settings["models"]["utility"].clear()
+                settings["models"]["utility"].update(was)
+                settings["connections"][:] = [c for c in settings["connections"] if c["id"] != mine]
+                settings.get("providers", {}).pop(mine, None)
+            return "model, address and key each follow the provider"
+        selftest_step("switching provider brings back that provider's own model, address and key", providers)
+
         def keys():
             name = "selftest:" + str(os.getpid())
             assert aig_keystore.put(name, "not-a-real-key-123"), "the key store refused"

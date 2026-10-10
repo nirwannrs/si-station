@@ -186,6 +186,55 @@ init python:
         save_keys()
         renpy.save_persistent()
 
+    ## What goes with a provider. Each provider has its own models, its own address and its own key,
+    ## so when a connection is switched to another provider those are put away under the one it
+    ## leaves and taken out again for the one it goes to. Coming back to a provider finds it as it
+    ## was left: the model for every job that uses the connection, the address and the key. A key
+    ## is never carried over to a provider it was not typed for.
+
+    def _jobs_on(connection_id):
+        return sorted(slot for slot, entry in llm_settings()["models"].items() if entry["connection"] == connection_id)
+
+    def _put_away(connection):
+        """Remembers, under the connection's provider, everything that goes with it."""
+        kept = llm_settings().setdefault("providers", {}).setdefault(connection["id"], {})
+        kept[connection["provider"]] = {"base_url": connection.get("base_url", ""),
+                                        "models": dict((slot, llm_settings()["models"][slot]["model"]) for slot in _jobs_on(connection["id"]))}
+        aig_keystore.put("%s@%s" % (key_name(connection["id"]), connection["provider"]), runtime.keys.get(connection["id"], "").strip())
+
+    def _take_out(connection, slots=None):
+        """Sets the jobs on a connection to what was last used with its provider: the model that was
+        chosen, or the one suggested for the job when none was yet."""
+        kept = llm_settings().get("providers", {}).get(connection["id"], {}).get(connection["provider"], {})
+        for slot in _jobs_on(connection["id"]) if slots is None else slots:
+            llm_settings()["models"][slot]["model"] = kept.get("models", {}).get(slot) or aig_llm.SUGGESTED_MODELS.get(connection["provider"], {}).get(slot) or ""
+        return kept
+
+    def switch_provider(connection, provider):
+        """Moves a connection to another provider, taking that provider's own model, address and key with it."""
+        if connection["provider"] != provider:
+            save_keys()
+            _put_away(connection)
+            connection["provider"] = provider
+            connection["base_url"] = _take_out(connection).get("base_url", "")
+            runtime.keys[connection["id"]] = aig_keystore.get("%s@%s" % (key_name(connection["id"]), provider)) or ""
+            input_fields.clear()
+            sync_context_size()
+            keep_settings()
+        renpy.restart_interaction()
+
+    def share_connection(slot):
+        """Switches a job between the main model's provider and one of its own. Either way the job
+        goes back to the model it last used there."""
+        settings = llm_settings()
+        entry = settings["models"][slot]
+        _put_away(llm_connection(entry["connection"]))
+        entry["connection"] = slot if entry["connection"] == "main" else "main"
+        _take_out(llm_connection(entry["connection"]), [slot])
+        input_fields.clear()
+        keep_settings()
+        renpy.restart_interaction()
+
     def llm_ready():
         return bool(llm_settings()["models"]["main"]["model"].strip())
 
@@ -2116,14 +2165,14 @@ screen model_slot(slot, title, help):
             vbox:
                 style_prefix "check"
                 xsize 1100
-                textbutton _("Same provider and key as the main model") action ToggleDict(entry, "connection", "main", slot)
+                textbutton _("Same provider and key as the main model") action Function(share_connection, slot) selected (entry["connection"] == "main")
 
         if entry["connection"] == slot:
             hbox:
                 style_prefix "radio"
                 spacing 20
                 for provider, name in aig_llm.PROVIDERS:
-                    textbutton name action SetDict(connection, "provider", provider)
+                    textbutton name action [DisableAllInputValues(), Function(switch_provider, connection, provider)] selected (connection["provider"] == provider)
 
             use settings_input(_("API key"), runtime.keys, connection["id"], secret=True)
             text esc(aig_keystore.describe()) size 22 color "#999999"
