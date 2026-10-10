@@ -79,8 +79,25 @@ class EngineTest(unittest.TestCase):
         try:
             packed = pack_card(CARD_DIR, os.path.join(work, "download.sicard"))
             library = os.path.join(work, "library")
-            self.assertEqual(import_card(packed, library), "rusty_lantern.sicard")
-            self.assertEqual(import_card(packed, library), "rusty_lantern.sicard")  # importing again replaces it
+            replaced = []
+            self.assertEqual(import_card(packed, library, replaced), "rusty_lantern.sicard")
+            self.assertEqual(replaced, [])
+            self.assertEqual(import_card(packed, library, replaced), "rusty_lantern.sicard")  # importing again replaces it, and says so
+            self.assertEqual(replaced, ["rusty_lantern.sicard"])
+            # The same card under another name, and the folder it was made in, do not stack up beside it.
+            shutil.copyfile(packed, os.path.join(library, "rusty lantern (1).sicard"))
+            shutil.copytree(CARD_DIR, os.path.join(library, "my_lantern"))
+            self.assertEqual(len(list_cards(library)), 3)
+            del replaced[:]
+            self.assertEqual(import_card(packed, library, replaced), "rusty_lantern.sicard")
+            self.assertEqual(sorted(replaced), ["my_lantern", "rusty lantern (1).sicard", "rusty_lantern.sicard"])
+            self.assertEqual([e["name"] for e in list_cards(library)], ["rusty_lantern.sicard"])
+            self.assertEqual(len(os.listdir(os.path.join(library, ".trash"))), 4)                       # moved aside, not deleted
+            self.assertTrue(os.path.isfile(os.path.join(os.path.join(library, ".trash"), [n for n in os.listdir(os.path.join(library, ".trash")) if n.startswith("my_lantern")][0], "card.json")))
+            # A copy dropped into the library by hand, then imported from there, ends up as the one copy.
+            shutil.copyfile(packed, os.path.join(library, "download.sicard"))
+            self.assertEqual(import_card(os.path.join(library, "download.sicard"), library), "rusty_lantern.sicard")
+            self.assertEqual([e["name"] for e in list_cards(library)], ["rusty_lantern.sicard"])
             plain_zip = shutil.make_archive(os.path.join(library, "plain"), "zip", CARD_DIR)
             with open(os.path.join(library, "broken.sicard"), "w") as f:
                 f.write("not a card")

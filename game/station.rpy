@@ -138,7 +138,12 @@ init python:
         if not path:
             return None
         try:
-            return aig_card.import_card(path, cards_dir())
+            replaced = []
+            name = aig_card.import_card(path, cards_dir(), replaced)
+            ## A library keeps one copy of a card. The player is told when importing took the place of one.
+            runtime.import_message = ("This card was already here, and the imported one has taken its place. The copy it replaced (%s) is in the cards folder, under .trash. "
+                                      "Saves made with it carry on with the new one." % ", ".join(replaced)) if replaced else None
+            return name
         except aig_card.CardError as e:
             runtime.import_message = "That file is not a usable card: " + e.problems[0]
         except (IOError, OSError) as e:

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import time
 import zipfile
 
 SPEC = "aigame-card"
@@ -242,10 +243,14 @@ def list_cards(library):
     return entries
 
 
-def import_card(source, library):
+def import_card(source, library, replaced=None):
     """Checks a .sicard file and copies it into the library. Returns the name it is stored under.
 
-    The stored name comes from the card's id, so importing a newer copy of a card replaces the old one.
+    A library holds one copy of a card. The stored name comes from the card's id, and whatever
+    else in the library is that same card (an older file, one under another name, the folder it
+    was made in) is moved out of the way, into the library's .trash folder, where a slip can be
+    undone by hand. replaced, when given, is a list that receives the names of what was moved,
+    so the player can be told.
     """
     if os.path.isdir(source):
         raise CardError(["Choose a %s file, not a folder." % EXTENSION])
@@ -254,8 +259,27 @@ def import_card(source, library):
     target = os.path.join(library, name)
     if not os.path.isdir(library):
         os.makedirs(library)
-    if os.path.abspath(source) != os.path.abspath(target):
+    same = lambda a, b: os.path.abspath(a) == os.path.abspath(b)
+    for entry in list_cards(library):
+        path = os.path.join(library, entry["name"])
+        if entry["card"] is None or entry["card"].id != card.id or same(path, source):
+            continue
+        bin_ = os.path.join(library, ".trash")
+        if not os.path.isdir(bin_):
+            os.makedirs(bin_)
+        stem, ending = (entry["name"][:-len(EXTENSION)], EXTENSION) if os.path.isfile(path) else (entry["name"], "")
+        kept, n = os.path.join(bin_, "%s-%d%s" % (stem, int(time.time()), ending)), 2
+        while os.path.exists(kept):
+            kept, n = os.path.join(bin_, "%s-%d-%d%s" % (stem, int(time.time()), n, ending)), n + 1
+        os.rename(path, kept)
+        _cache.pop(path, None)
+        if replaced is not None:
+            replaced.append(entry["name"])
+    if not same(source, target):
         shutil.copyfile(source, target)
+        if same(os.path.dirname(source), library):
+            os.remove(source)                   # it was already in the library under another name: one copy, under its own
+            _cache.pop(source, None)
     _cache.pop(target, None)
     return name
 
