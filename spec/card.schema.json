@@ -21,7 +21,8 @@
         "description": { "type": "string", "description": "Shown to players in the card library. Not sent to the LLM." },
         "creator_note": { "type": "string", "description": "A note from the creator to players, shown on the Card info screen. Not sent to the LLM." },
         "tags": { "type": "array", "items": { "type": "string" } },
-        "cover": { "$ref": "#/$defs/asset" }
+        "cover": { "$ref": "#/$defs/asset", "description": "A picture shown behind the main menu while this card is inserted." },
+        "icon": { "$ref": "#/$defs/asset", "description": "A small picture shown beside the card in the player's library. A plain disc is shown when the card has none." }
       }
     },
     "display": {

@@ -167,7 +167,7 @@ class Tools(object):
                 "rules.features switches the optional systems; anything off is neither tracked nor shown. Stats, quests, shops and the map exist when the card defines any.",
                 "Turn-based fights (rules.battle.mode \"system\") need rules.battle.health_stat, and only characters defined in the card can be fought.",
                 "Use {{user}} in world and character text wherever the player's name belongs.",
-                "Image paths in the card (cover, sprites, backgrounds) must point at files added with add_image.",
+                "Image paths in the card (cover, icon, sprites, backgrounds) must point at files added with add_image.",
             ],
         }
 
@@ -218,7 +218,7 @@ class Tools(object):
             raise ToolError("Images must be PNG, JPEG or WebP and under 50 MB.")
         with open(source, "rb") as f:
             self.ws.save_asset(project, target, f.read())
-        return {"card": project, "saved_as": target, "note": "Now point the card at it, for example set characters[ID].sprites.neutral or meta.cover to this path."}
+        return {"card": project, "saved_as": target, "note": "Now point the card at it, for example set characters[ID].sprites.neutral, meta.cover or meta.icon to this path."}
 
     def import_lorebook(self, args):
         project, source = args.get("card"), args.get("file")
@@ -307,11 +307,11 @@ TOOLS = [
     {"name": "replace_card", "description": "Replaces a card's whole content. Prefer edit_card; use this only for a full rewrite.",
      "inputSchema": {"type": "object", "required": ["card", "content"], "additionalProperties": False, "properties": {
          "card": _CARD, "content": {"type": "object", "description": "The complete card."}}}},
-    {"name": "add_image", "description": "Copies an image from this computer into a card so the card can use it as a cover, sprite or background. Does not change the card itself.",
+    {"name": "add_image", "description": "Copies an image from this computer into a card so the card can use it as a cover, icon, sprite or background. Does not change the card itself.",
      "inputSchema": {"type": "object", "required": ["card", "file", "save_as"], "additionalProperties": False, "properties": {
          "card": _CARD,
          "file": {"type": "string", "description": "Full path of a PNG, JPEG or WebP file."},
-         "save_as": {"type": "string", "description": "Where it goes inside the card. Use assets/cover.png, assets/sprites/CHARACTER_ID/EXPRESSION.png or assets/bg/LOCATION_ID.jpg."}}}},
+         "save_as": {"type": "string", "description": "Where it goes inside the card. Use assets/cover.png, assets/icon.png (the small picture shown in the player's library), assets/sprites/CHARACTER_ID/EXPRESSION.png or assets/bg/LOCATION_ID.jpg."}}}},
     {"name": "import_lorebook", "description": "Adds the entries of a SillyTavern lorebook to a card's lorebook. Takes a World Info JSON file, or a character card (PNG or JSON) that carries a lorebook. Switched-off and empty entries are skipped.",
      "inputSchema": {"type": "object", "required": ["card", "file"], "additionalProperties": False, "properties": {
          "card": _CARD, "file": {"type": "string", "description": "Full path of the lorebook file."}}}},

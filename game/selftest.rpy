@@ -344,6 +344,7 @@ init python:
             assert usable and usable[0]["card"].id == SELFTEST_CARD, "the card played last is not listed first: %s" % [e["name"] for e in listed]
             assert played_words(usable[0]["played"]).startswith("Last played today, "), played_words(usable[0]["played"])
             assert played_words(None) == "Not played yet" and all(e["played"] is None for e in usable[1:]), [(e["name"], e["played"]) for e in usable]
+            assert card_icon(usable[0]["card"]) == "gui/card_disc.png" and renpy.loadable("gui/card_disc.png"), "a card with no icon of its own has no disc to show"
             ## Importing puts a card in the library and leaves the choosing to the player.
             assert import_card_file(os.path.join(cards_dir(), selftest.stored)) is None and runtime.import_note, runtime.import_message
             return "%s: %s" % (usable[0]["card"].title, played_words(usable[0]["played"]))

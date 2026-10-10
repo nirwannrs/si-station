@@ -60,6 +60,14 @@ class InStepTest(unittest.TestCase):
             if os.path.isfile(path):
                 self.assertEqual(card.check_card(json.loads(read("cards", name, "card.json"))), [], name)
 
+    def test_a_cards_pictures_can_be_set_in_the_editor_and_through_the_mcp_server(self):
+        page, server = read("creator", "static", "app.js"), read("creator", "mcp_server.py")
+        for picture in ("cover", "icon"):
+            self.assertIn(picture, CARD_SCHEMA["properties"]["meta"]["properties"])
+            self.assertIn('{ t: "asset", k: "%s"' % picture, page)
+            self.assertIn("meta.%s" % picture, server)
+        self.assertTrue(os.path.isfile(os.path.join(ROOT, "game", "gui", "card_disc.png")))       # what the library shows for a card with no icon
+
     def test_the_editor_knows_every_switch_and_state_block(self):
         page = read("creator", "static", "app.js")
         defaults = re.search(r"const FEATURE_DEFAULTS = \{(.*?)\};", page).group(1)

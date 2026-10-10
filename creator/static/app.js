@@ -495,6 +495,7 @@ const SECTIONS = [
       { t: "tags", k: "tags", label: "Tags", help: "Separated by commas." },
       { t: "area", k: "creator_note", label: "Creator's note", rows: 5, help: "Anything you want to tell players. The AI never sees this." },
       { t: "asset", k: "cover", label: "Cover picture", help: "Shown behind the main menu.", path: (o, ext) => `assets/cover${ext}` },
+      { t: "asset", k: "icon", label: "Card icon", help: "A small picture shown beside the card where the player chooses one. Square works best. A plain disc is shown when there is none.", path: (o, ext) => `assets/icon${ext}` },
     ] },
   ] },
 

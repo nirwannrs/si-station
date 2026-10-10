@@ -198,6 +198,11 @@ init python:
         clock = time.strftime("%H:%M", time.localtime(when))
         return "Last played today, %s" % clock if days <= 0 else "Last played yesterday, %s" % clock if days == 1 else "Last played %s" % time.strftime("%d %b %Y", time.localtime(when)).lstrip("0")
 
+    def card_icon(card):
+        """The picture shown beside a card in the library: the card's own, or a plain disc."""
+        own = card.data["meta"].get("icon")
+        return (asset_image(card, own) if own else None) or "gui/card_disc.png"
+
     def library_cards():
         """The library as it is listed: the card played last first, cards never played after those
         that were, by title, and files that cannot be used at the end. Each usable entry has "played"."""
@@ -237,8 +242,11 @@ screen card_info():
 screen insert_card():
     default choosing = False
     add "#ffffff"
+    ## The library is what the player comes for. Being asked to insert a card is only for someone
+    ## who has none yet.
+    $ library = library_cards()
 
-    if not choosing:
+    if not choosing and not library:
         vbox:
             align (0.5, 0.5)
             spacing 40
@@ -252,7 +260,6 @@ screen insert_card():
                 action SetScreenVariable("choosing", True)
 
     else:
-        $ library = library_cards()
         vbox:
             xalign 0.5
             ypos 80
@@ -275,14 +282,18 @@ screen insert_card():
                                 background "#f0f0f0"
                                 hover_background "#d8ecf6"
                                 action Return(entry["name"])
-                                vbox:
-                                    $ meta = entry["card"].data["meta"]
-                                    text esc(meta["title"]) size 40 color "#111111"
-                                    text esc(played_words(entry["played"])) size 22 color ("#0077aa" if entry["played"] else "#999999")
-                                    if meta.get("author"):
-                                        text esc("by " + meta["author"]) size 24 color "#777777"
-                                    if meta.get("description"):
-                                        text esc(meta["description"]) size 26 color "#444444"
+                                hbox:
+                                    spacing 24
+                                    add card_icon(entry["card"]) fit "contain" xysize (120, 120) yalign 0.0
+                                    vbox:
+                                        xsize 1080
+                                        $ meta = entry["card"].data["meta"]
+                                        text esc(meta["title"]) size 40 color "#111111"
+                                        text esc(played_words(entry["played"])) size 22 color ("#0077aa" if entry["played"] else "#999999")
+                                        if meta.get("author"):
+                                            text esc("by " + meta["author"]) size 24 color "#777777"
+                                        if meta.get("description"):
+                                            text esc(meta["description"]) size 26 color "#444444"
                         else:
                             frame:
                                 xfill True
@@ -302,6 +313,7 @@ screen insert_card():
             hbox:
                 spacing 60
                 textbutton _("Import a card file...") action Function(import_from_file) text_idle_color "#0077aa" text_hover_color "#00aaff"
-                textbutton _("Back") action SetScreenVariable("choosing", False) text_idle_color "#777777" text_hover_color "#00aaff"
+                if not library:
+                    textbutton _("Back") action SetScreenVariable("choosing", False) text_idle_color "#777777" text_hover_color "#00aaff"
 
             text esc("Cards are kept in " + cards_dir()) size 22 color "#999999"
