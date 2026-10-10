@@ -52,11 +52,23 @@ init python:
             for folder in ("cards", "presets"):
                 if not os.path.isdir(os.path.join(data_dir(), folder)):
                     os.makedirs(os.path.join(data_dir(), folder))
-            shipped = os.path.join(config.basedir, "cards")
+            ## Each sample is put there once. A list of those already given is kept beside them, so one
+            ## the player has removed, or replaced by importing a newer copy, does not come back.
+            import json
+            shipped, listed = os.path.join(config.basedir, "cards"), os.path.join(cards_dir(), ".seeded")
+            try:
+                with open(listed) as f:
+                    given = set(json.load(f))
+            except (IOError, OSError, ValueError):
+                given = set()
             for name in sorted(os.listdir(shipped)) if os.path.isdir(shipped) else []:
                 source, target = os.path.join(shipped, name), os.path.join(cards_dir(), name)
-                if os.path.isfile(os.path.join(source, "card.json")) and not os.path.exists(target):
-                    shutil.copytree(source, target)
+                if os.path.isfile(os.path.join(source, "card.json")):
+                    if name not in given and not os.path.exists(target):
+                        shutil.copytree(source, target)
+                    given.add(name)
+            with open(listed, "w") as f:
+                json.dump(sorted(given), f)
             shutil.copyfile(os.path.join(config.basedir, "presets", "default.preset.json"), os.path.join(data_dir(), "presets", "default.preset.json"))
         except (IOError, OSError):
             pass        # the insert-card screen says where cards are looked for, which is enough to act on

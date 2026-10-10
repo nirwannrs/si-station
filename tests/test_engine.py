@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "game"))
 
 from aigame import battle, prompt  # noqa: E402
 from aigame.actions import apply_action, apply_actions, sell_price  # noqa: E402
-from aigame.card import Card, CardError, check_card, copies_of, import_card, list_cards, load_card, pack_card  # noqa: E402
+from aigame.card import Card, CardError, check_card, copies_of, import_card, trash_card, list_cards, load_card, pack_card  # noqa: E402
 from aigame.state import describe_states, effective_stat, limits, new_game, reconcile  # noqa: E402
 
 CARD_DIR = os.path.join(ROOT, "cards", "rusty_lantern")
@@ -96,6 +96,13 @@ class EngineTest(unittest.TestCase):
             self.assertEqual([e["name"] for e in list_cards(library)], ["rusty_lantern.sicard"])
             self.assertEqual(len(os.listdir(os.path.join(library, ".trash"))), 4)                       # moved aside, not deleted
             self.assertTrue(os.path.isfile(os.path.join(os.path.join(library, ".trash"), [n for n in os.listdir(os.path.join(library, ".trash")) if n.startswith("my_lantern")][0], "card.json")))
+            # A card can be taken out of the library; it goes to the trash, and nothing outside the library can be named.
+            shutil.copyfile(packed, os.path.join(library, "other.sicard"))
+            gone = trash_card(library, "other.sicard")
+            self.assertTrue(os.path.isfile(gone) and os.path.dirname(gone) == os.path.join(library, ".trash"))
+            self.assertEqual([e["name"] for e in list_cards(library)], ["rusty_lantern.sicard"])
+            for bad in ("other.sicard", "../download.sicard", ".trash"):
+                self.assertRaises(CardError, trash_card, library, bad)
             # A copy dropped into the library by hand, then imported from there, ends up as the one copy.
             shutil.copyfile(packed, os.path.join(library, "download.sicard"))
             self.assertEqual(import_card(os.path.join(library, "download.sicard"), library), "rusty_lantern.sicard")

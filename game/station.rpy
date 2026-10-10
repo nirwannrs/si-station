@@ -198,6 +198,28 @@ init python:
         clock = time.strftime("%H:%M", time.localtime(when))
         return "Last played today, %s" % clock if days <= 0 else "Last played yesterday, %s" % clock if days == 1 else "Last played %s" % time.strftime("%d %b %Y", time.localtime(when)).lstrip("0")
 
+    def remove_card(name):
+        """Takes a card out of the library. It goes to the cards folder's .trash, and its saves stay."""
+        try:
+            aig_card.trash_card(cards_dir(), name)
+            runtime.import_message, runtime.import_note = None, "Removed. It is in the cards folder, under .trash, if you want it back."
+        except (aig_card.CardError, IOError, OSError) as e:
+            runtime.import_note, runtime.import_message = None, "Could not remove it: %s" % (e.problems[0] if isinstance(e, aig_card.CardError) else e)
+        if persistent.card == name:
+            persistent.card = None
+        renpy.restart_interaction()
+
+    def open_cards_folder():
+        """Shows the cards folder in the system's file manager."""
+        try:
+            if renpy.windows:
+                os.startfile(cards_dir())
+            else:
+                subprocess.Popen(["open" if renpy.macintosh else "xdg-open", cards_dir()])
+        except Exception:
+            runtime.import_message = "Could not open the folder. It is at %s" % cards_dir()
+            renpy.restart_interaction()
+
     def card_icon(card):
         """The picture shown beside a card in the library: the card's own, or a plain disc."""
         own = card.data["meta"].get("icon")
@@ -245,6 +267,7 @@ screen insert_card():
     ## The library is what the player comes for. Being asked to insert a card is only for someone
     ## who has none yet.
     $ library = library_cards()
+    $ usable = len([entry for entry in library if entry["card"]])
 
     if not choosing and not library:
         vbox:
@@ -262,58 +285,101 @@ screen insert_card():
     else:
         vbox:
             xalign 0.5
-            ypos 80
-            xsize 1300
-            spacing 24
-            text _("Choose a card") size 60 color "#111111"
+            ypos 60
+            xsize 1400
+            spacing 18
 
-            viewport:
-                ysize 620
-                scrollbars "vertical"
-                mousewheel True
-                draggable True
+            hbox:
+                xfill True
                 vbox:
-                    spacing 16
-                    for entry in library:
-                        if entry["card"]:
-                            button:
-                                xfill True
-                                padding (24, 16)
-                                background "#f0f0f0"
-                                hover_background "#d8ecf6"
-                                action Return(entry["name"])
-                                hbox:
-                                    spacing 24
-                                    add card_icon(entry["card"]) fit "contain" xysize (120, 120) yalign 0.0
-                                    vbox:
-                                        xsize 1080
-                                        $ meta = entry["card"].data["meta"]
-                                        text esc(meta["title"]) size 40 color "#111111"
-                                        text esc(played_words(entry["played"])) size 22 color ("#0077aa" if entry["played"] else "#999999")
-                                        if meta.get("author"):
-                                            text esc("by " + meta["author"]) size 24 color "#777777"
-                                        if meta.get("description"):
-                                            text esc(meta["description"]) size 26 color "#444444"
-                        else:
-                            frame:
-                                xfill True
-                                padding (24, 16)
-                                background "#f6eaea"
-                                vbox:
-                                    text esc(entry["name"]) size 30 color "#884444"
-                                    text esc("Cannot be used: " + entry["error"]) size 24 color "#884444"
-                    if not library:
-                        text _("No cards here yet.") color "#777777"
+                    text _("Your cards") size 60 color "#111111"
+                    text esc("Choose one to play." if usable else "Import a card file to begin.") size 26 color "#777777"
+                textbutton _("Import a card file..."):
+                    xalign 1.0
+                    yalign 0.5
+                    padding (28, 14)
+                    background "#0077aa"
+                    hover_background "#00aaff"
+                    text_size 28
+                    text_color "#ffffff"
+                    action Function(import_from_file)
 
             if getattr(runtime, "import_message", None):
                 text esc(runtime.import_message) size 26 color "#aa3333"
             elif getattr(runtime, "import_note", None):
                 text esc(runtime.import_note) size 26 color "#227744"
 
-            hbox:
-                spacing 60
-                textbutton _("Import a card file...") action Function(import_from_file) text_idle_color "#0077aa" text_hover_color "#00aaff"
-                if not library:
-                    textbutton _("Back") action SetScreenVariable("choosing", False) text_idle_color "#777777" text_hover_color "#00aaff"
+            viewport:
+                ysize 660
+                scrollbars "vertical"
+                mousewheel True
+                draggable True
+                vbox:
+                    spacing 14
+                    for entry in library:
+                        if entry["card"]:
+                            $ meta = entry["card"].data["meta"]
+                            ## One row a card: the card itself, where a click anywhere plays it, and beside
+                            ## it what else can be done, kept apart so a slip on Remove is not a slip on the card.
+                            frame:
+                                xsize 1360
+                                padding (0, 0)
+                                background "#f2f2f2"
+                                hbox:
+                                    button:
+                                        xsize 1180
+                                        padding (24, 18)
+                                        hover_background "#d8ecf6"
+                                        action Return(entry["name"])
+                                        hbox:
+                                            spacing 24
+                                            add card_icon(entry["card"]) fit "contain" xysize (128, 128) yalign 0.0
+                                            vbox:
+                                                xsize 960
+                                                spacing 4
+                                                text esc(meta["title"]) size 40 color "#111111"
+                                                hbox:
+                                                    spacing 24
+                                                    text esc(played_words(entry["played"])) size 22 color ("#0077aa" if entry["played"] else "#999999")
+                                                    if meta.get("author"):
+                                                        text esc("by " + meta["author"]) size 22 color "#777777"
+                                                if meta.get("description"):
+                                                    text esc(meta["description"]) size 25 color "#444444"
+                                    vbox:
+                                        xsize 180
+                                        yalign 0.5
+                                        spacing 14
+                                        textbutton _("Play"):
+                                            xalign 0.5
+                                            padding (26, 10)
+                                            background "#0077aa"
+                                            hover_background "#00aaff"
+                                            text_size 28
+                                            text_color "#ffffff"
+                                            action Return(entry["name"])
+                                        textbutton _("Remove") xalign 0.5 text_size 22 text_idle_color "#999999" text_hover_color "#cc3333" action Confirm(
+                                            "Remove %s from your library?\nYour saves for it are kept." % esc(meta["title"]), Function(remove_card, entry["name"]))
+                        else:
+                            frame:
+                                xsize 1360
+                                padding (0, 0)
+                                background "#f6eaea"
+                                hbox:
+                                    vbox:
+                                        xsize 1180
+                                        xoffset 24
+                                        yoffset 18
+                                        text esc(entry["name"]) size 30 color "#884444"
+                                        text esc("Cannot be used: " + entry["error"]) size 24 color "#884444"
+                                        null height 36
+                                    textbutton _("Remove") xsize 180 yalign 0.5 text_xalign 0.5 text_size 22 text_idle_color "#884444" text_hover_color "#cc3333" action Confirm(
+                                        "Remove %s from your library?" % esc(entry["name"]), Function(remove_card, entry["name"]))
+                    if not library:
+                        text _("No cards here yet.") size 30 color "#777777"
 
-            text esc("Cards are kept in " + cards_dir()) size 22 color "#999999"
+            hbox:
+                spacing 40
+                textbutton _("Open the cards folder") text_size 24 text_idle_color "#0077aa" text_hover_color "#00aaff" action Function(open_cards_folder)
+                if not library:
+                    textbutton _("Back") text_size 24 text_idle_color "#777777" text_hover_color "#00aaff" action SetScreenVariable("choosing", False)
+                text esc(cards_dir()) size 20 color "#999999" yalign 0.5

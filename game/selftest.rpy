@@ -347,8 +347,14 @@ init python:
             assert card_icon(usable[0]["card"]) == "gui/card_disc.png" and renpy.loadable("gui/card_disc.png"), "a card with no icon of its own has no disc to show"
             ## Importing puts a card in the library and leaves the choosing to the player.
             assert import_card_file(os.path.join(cards_dir(), selftest.stored)) is None and runtime.import_note, runtime.import_message
+            ## A card can be taken out of the library: it goes to the trash folder and is no longer listed.
+            with open(os.path.join(cards_dir(), "unwanted.sicard"), "w") as f:
+                f.write("not a card")
+            assert "unwanted.sicard" in [e["name"] for e in library_cards()]
+            remove_card("unwanted.sicard")
+            assert "unwanted.sicard" not in [e["name"] for e in library_cards()] and os.listdir(os.path.join(cards_dir(), ".trash")), runtime.import_message
             return "%s: %s" % (usable[0]["card"].title, played_words(usable[0]["played"]))
-        selftest_step("the library lists the card played last first, with when", library)
+        selftest_step("the library lists the card played last first, with when, and a card can be removed", library)
 
         def creator_runs():
             import requests

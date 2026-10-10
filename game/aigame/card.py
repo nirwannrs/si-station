@@ -254,6 +254,24 @@ def copies_of(source, library):
                         if entry["card"] is not None and entry["card"].id == card.id and os.path.abspath(os.path.join(library, entry["name"])) != os.path.abspath(source)]
 
 
+def trash_card(library, name):
+    """Moves a card (a .sicard file or a card folder) out of the library into its .trash folder,
+    where a slip can be undone by hand. Returns where it went."""
+    path = os.path.join(library, name)
+    if os.sep in name or (os.altsep and os.altsep in name) or name.startswith(".") or not os.path.exists(path):
+        raise CardError(["There is no card called %s in the library." % name])
+    bin_ = os.path.join(library, ".trash")
+    if not os.path.isdir(bin_):
+        os.makedirs(bin_)
+    stem, ending = (name[:-len(EXTENSION)], EXTENSION) if os.path.isfile(path) and name.lower().endswith(EXTENSION) else (name, "")
+    kept, n = os.path.join(bin_, "%s-%d%s" % (stem, int(time.time()), ending)), 2
+    while os.path.exists(kept):
+        kept, n = os.path.join(bin_, "%s-%d-%d%s" % (stem, int(time.time()), n, ending)), n + 1
+    os.rename(path, kept)
+    _cache.pop(path, None)
+    return kept
+
+
 def import_card(source, library, replaced=None):
     """Checks a .sicard file and copies it into the library. Returns the name it is stored under.
 
@@ -275,15 +293,7 @@ def import_card(source, library, replaced=None):
         path = os.path.join(library, entry["name"])
         if entry["card"] is None or entry["card"].id != card.id or same(path, source):
             continue
-        bin_ = os.path.join(library, ".trash")
-        if not os.path.isdir(bin_):
-            os.makedirs(bin_)
-        stem, ending = (entry["name"][:-len(EXTENSION)], EXTENSION) if os.path.isfile(path) else (entry["name"], "")
-        kept, n = os.path.join(bin_, "%s-%d%s" % (stem, int(time.time()), ending)), 2
-        while os.path.exists(kept):
-            kept, n = os.path.join(bin_, "%s-%d-%d%s" % (stem, int(time.time()), n, ending)), n + 1
-        os.rename(path, kept)
-        _cache.pop(path, None)
+        trash_card(library, entry["name"])
         if replaced is not None:
             replaced.append(entry["name"])
     if not same(source, target):
