@@ -387,14 +387,17 @@ _builtin('write_journal', 'helper', "Keep the journal", "Writes a short entry ab
          {}, """\
 You keep the journal of a text adventure. A scene has just ended; it is given to you in full. Write one entry about it, so that the narrator can be reminded of this scene much later, when the scene itself is long out of sight.
 
-Write what a storyteller would need to pick the thread up again: what happened and how it ended, what was decided or promised, when it was if the scene gives a time, what was learned or kept secret and who knows of it, how anyone's standing with {{user}} changed, and what was left unfinished. Use names: the scene is marked "Player:" for what {{user}} did and said, and you write of them as {{user}}, never as "the player". Past tense, plain statements, at most 90 words. Leave out health, money and items; the game tracks those.
+Write the record of what happened, in the order it happened: what was done and said that mattered, what was decided, promised or agreed and by whom, what was learned or kept secret and who knows of it, how anyone's standing with {{user}} changed, and how the scene ended. Keep the particulars that would be needed to tell it again faithfully: names, places, times, amounts, the exact terms of a promise or a bet. Use names: the scene is marked "Player:" for what {{user}} did and said, and you write of them as {{user}}, never as "the player". Past tense, plain statements, at most 180 words. Leave out health, money and items; the game tracks those.
+An entry is a record of that time and is not rewritten later. So write only what happened, not what is still pending, expected or undecided: how things stand now is kept elsewhere and brought up to date as the story goes.
 
 Give it a short title, and a gist: one plain sentence of at most 25 words that says what happened, with the names in it. The gist is all the narrator is always shown of this scene, so it must make sense by itself.
 
 Give six to ten keywords: the words that would come up in talk if this scene were referred to later. Use the short everyday form of each name, and include other words someone might use for the same thing. Leave out whatever is in nearly every scene.
 
+If this scene settles, answers or overturns something from one of the earlier scenes listed, say so under "later": the number of that scene and one sentence on how it turned out. That sentence is added to the older entry, so it is not read as still open. Leave the list empty when nothing earlier is touched.
+
 Reply with JSON only:
-{"title": "...", "gist": "...", "content": "...", "keywords": ["...", "..."]}""")
+{"title": "...", "gist": "...", "content": "...", "keywords": ["...", "..."], "later": [{"scene": 3, "note": "..."}]}""")
 
 _builtin('suggest_choices', 'helper', "Suggest replies", "Writes the suggested replies shown above the input box.",
          {'count': 'how many suggestions to give'}, """\
@@ -506,4 +509,5 @@ _sends("keep_time", _HELPER + " It is only called on a turn where the game has f
        ("[The player's message]", "what the player just typed", "The player, this turn.", None),
        ("[The reply]", "the reply the line heads", "The story model's reply this turn.", "preset:instructions"))
 _sends("write_journal", _HELPER,
+       ("[Earlier scenes]", "the journal's entries so far, one numbered line each, so the new entry can say what it settles of them; only when there are any", "The journal: this same job's earlier entries.", None),
        ("[Scene]", "the scene that just ended, turn by turn", "The save: every turn since the last journal entry, word for word, each as what the player typed and what the story model replied. The game decides where a scene ends: the player goes somewhere else, an objective is finished, a fight is over, or twenty turns have passed.", None))

@@ -29,7 +29,8 @@ KEPT_BACK = 2       # ...leaving its newest turns for the next entry, since it i
 LONGEST = 30        # the most turns one entry is written from
 RECALLED = 3        # the most entries sent in full in one turn when nothing points at one in particular, pinned ones aside
 POINTED = 6         # ...and when something does: a word few scenes share
-ROOM = 4500         # the most characters of full entries sent in one turn, pinned ones aside
+ROOM = 6000         # the most characters of full entries sent in one turn, pinned ones aside
+LATER = 3           # the most notes one entry keeps on how something in it turned out afterwards
 LISTED = 60         # the most scenes in the list of what has happened, newest kept
 
 
@@ -67,9 +68,11 @@ def parse_entry(text):
     if not isinstance(content, str) or not content.strip():
         return None
     keywords = [k.strip() for k in parsed.get("keywords", []) if isinstance(k, str) and len(k.strip()) >= 3] if isinstance(parsed.get("keywords"), list) else []
+    later = [{"scene": note["scene"], "note": " ".join(note["note"].split())[:240]} for note in (parsed.get("later") if isinstance(parsed.get("later"), list) else [])
+             if isinstance(note, dict) and isinstance(note.get("scene"), int) and not isinstance(note.get("scene"), bool) and isinstance(note.get("note"), str) and note["note"].strip()]
     return {"title": " ".join(title.split())[:80] if isinstance(title, str) and title.strip() else "A scene",
             "gist": " ".join(gist.split())[:240] if isinstance(gist, str) else "",
-            "content": " ".join(content.split())[:1200], "keywords": keywords[:12]}
+            "content": " ".join(content.split())[:1800], "keywords": keywords[:12], "later": later}
 
 
 def gist(entry):
@@ -94,6 +97,12 @@ def add(card, state, start, end, place, written):
     # player" for the person it is about. The story model reads these entries: they use the name.
     me = state["actors"][PLAYER]["name"]
     written = dict(written, title=by_name(written["title"], me), content=by_name(written["content"], me), gist=by_name(written.get("gist", ""), me))
+    # An entry is a record of its time and is never rewritten. What a later scene settles of it is
+    # added to it as a note, so that what it left open is not read, much later, as open still.
+    for note in written.pop("later", []):
+        for older in entries:
+            if older["id"] == note["scene"]:
+                older["later"] = (older.get("later", []) + [by_name(note["note"], me)])[-LATER:]
     entry = dict(written, id=1 + max([e["id"] for e in entries] or [0]), start=start, end=end, place=place,
                  who=named_in(card, told + "\n" + written["content"]), pinned=False)
     when = [t["header"] for t in turns if t.get("header")]
@@ -259,4 +268,6 @@ def describe(entries, card=None):
         names = [card.characters[c]["name"] for c in entry.get("there", []) if c in card.characters] if card is not None and "there" in entry else None
         facts = ([e_when] if e_when else []) + ([] if names is None else ["present: %s" % (", ".join(names) or "nobody but {{user}}")])
         return " (%s)" % "; ".join(facts) if facts else ""
-    return "[Remembered from earlier in the story]\n" + "\n".join("- %s%s: %s" % (e["title"], there(e, e.get("when")), e["content"]) for e in entries)
+    after = lambda e: " Later: %s" % " ".join(e["later"]) if e.get("later") else ""
+    return ("[Remembered from earlier in the story]\nEach is the record of that time. Where a note says what came later, or how things stand now differs, that is what holds.\n"
+            + "\n".join("- %s%s: %s%s" % (e["title"], there(e, e.get("when")), e["content"], after(e)) for e in entries))

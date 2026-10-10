@@ -53,9 +53,34 @@ class JournalTest(unittest.TestCase):
         start, end, place = self.play("(The fight is over.)", "You stand over him.")
         self.assertEqual((end - start, end), (journal.LONGEST, len(self.state["history"])))                            # never more than LONGEST turns in one entry
 
+    REMEMBERED = "[Remembered from earlier in the story]\nEach is the record of that time. Where a note says what came later, or how things stand now differs, that is what holds.\n"
+
+    def test_a_later_scene_adds_to_an_older_entry_what_came_of_it(self):
+        """An entry is the record of its time and is not rewritten. What it left open would be read
+        as open for ever, so the entry of the scene that settles it says so, and that is added."""
+        me = self.state["actors"]["player"]["name"]
+        self.state["history"] = [{"player": "p", "results": [], "narration": "n"} for n in range(8)]
+        journal.add(self.card, self.state, 0, 4, "stable", {"title": "A bet with Tobin", "content": "Tobin bet the player a silver that the mare would foal by morning.", "keywords": ["bet"]})
+        asked = prompt.journal_prompt(self.card, self.state, self.state["history"][4:8])
+        self.assertIn("[Earlier scenes]\n1. A bet with Tobin. Tobin bet %s a silver" % me, asked[1][0]["content"])     # the helper is shown what came before, numbered
+        for part in ("not what is still pending", "at most 180 words", '"later"'):
+            self.assertIn(part, asked[0])
+        written = journal.parse_entry(json.dumps({"title": "The foal", "content": "The mare foaled at dawn and the player paid up.", "keywords": ["foal"],
+                                                  "later": [{"scene": 1, "note": "The mare foaled; the player lost and paid."}, {"scene": 99, "note": "x"}, {"scene": "1", "note": "y"}, {"scene": 1, "note": " "}]}))
+        self.assertEqual(written["later"], [{"scene": 1, "note": "The mare foaled; the player lost and paid."}, {"scene": 99, "note": "x"}])
+        journal.add(self.card, self.state, 4, 8, "stable", written)
+        old, new = self.state["journal"]
+        self.assertEqual(old["later"], ["The mare foaled; %s lost and paid." % me])
+        self.assertEqual(old["content"], "Tobin bet %s a silver that the mare would foal by morning." % me)             # the record itself stands as written
+        self.assertNotIn("later", new)
+        self.assertIn("morning. Later: The mare foaled; %s lost and paid." % me, journal.describe([old], self.card))
+        for n in range(5):
+            journal.add(self.card, self.state, 4, 8, "stable", {"title": "More", "content": "c", "keywords": [], "later": [{"scene": 1, "note": "note %d" % n}]})
+        self.assertEqual(old["later"], ["note 2", "note 3", "note 4"])                                                  # only the last few are kept
+
     def test_what_the_helper_wrote_is_cleaned_up(self):
         entry = journal.parse_entry('```json\n{"title": " The  letter ", "content": "Tobin gave\\nup the letter.", "keywords": ["letter", "ok", 5, " Tobin "]}\n```')
-        self.assertEqual(entry, {"title": "The letter", "gist": "", "content": "Tobin gave up the letter.", "keywords": ["letter", "Tobin"]})
+        self.assertEqual(entry, {"title": "The letter", "gist": "", "content": "Tobin gave up the letter.", "keywords": ["letter", "Tobin"], "later": []})
         self.assertEqual(journal.parse_entry('{"title": "t", "gist": " Tobin  gave it up. ", "content": "c"}')["gist"], "Tobin gave it up.")
         self.assertEqual(journal.gist({"gist": "Tobin gave it up.", "content": "Long."}), "Tobin gave it up.")
         self.assertEqual(journal.gist({"content": "Day 1, 11:39. Noelle challenged Ash to a broom race. Both crashed."}), "Noelle challenged Ash to a broom race.")   # an older entry: its first real sentence
@@ -122,7 +147,7 @@ class JournalTest(unittest.TestCase):
         self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "That duel at noon, Mira.", picked=[3])], ["Lunch and a yard duel", "Broom race, silence bet"])
         self.assertEqual([e["title"] for e in journal.recall(self.card, self.state, "Hm.", picked=[3])], ["Broom race, silence bet"])
         tail = prompt.narrator_prompt(self.card, self.state, self.preset, "Hm.", [], recalled=[3])[1][-1]["content"]
-        self.assertIn("[Remembered from earlier in the story]\n- Broom race, silence bet", tail)
+        self.assertIn(self.REMEMBERED + "- Broom race, silence bet", tail)
         listed = journal.timeline(self.card, self.state)
         self.assertIn("\n- Day 1, 11:08: Broom race, silence bet. %s and Mira talked; %s's bet stands. (there: Mira Oakhand)\n" % (me, me), listed)                                             # and every scene is always named, with when it was
         self.assertEqual(listed.count("\n- "), 5)
@@ -136,7 +161,7 @@ class JournalTest(unittest.TestCase):
         last = messages[-1]["content"]
         self.assertIn("[Story so far]\nThe player came to the inn.\n\n[What has happened so far, scene by scene]\n- Tobin's lie. Tobin swore he never saw the courier. (there: Tobin)\n- The cellar door. The cellar was locked; Mira keeps the key. (there: Mira Oakhand)\nAll of these happened", last)
         self.assertNotIn("A debt (", last)                                                   # that scene is still in the prompt: it needs no line
-        self.assertIn("\n\n[Remembered from earlier in the story]\n- Tobin's lie: Tobin swore he never saw the courier.", last)
+        self.assertIn("\n\n%s- Tobin's lie: Tobin swore he never saw the courier." % self.REMEMBERED, last)
         self.assertNotIn("scene by scene", system)
         self.assertNotIn("Remembered from earlier", system)
         self.assertEqual(last.count("The cellar was locked"), 1)                           # in the list of scenes, and not sent in full                                               # only what this turn calls for

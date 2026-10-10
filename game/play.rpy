@@ -384,6 +384,8 @@ screen hud(start="inventory"):
                                         textbutton _("Edit") action Function(journal_open_editor, entry["id"]) text_size 24 yalign 0.5
                                         textbutton _("Remove") action Confirm(_("Remove this entry? The story model will no longer be reminded of that scene."), Function(journal_remove, entry["id"])) text_size 24 yalign 0.5
                                     text esc(entry["content"]) size 24
+                                    if entry.get("later"):
+                                        text esc("Later: " + " ".join(entry["later"])) size 22 color "#c8e0b0"
                                     if entry.get("keywords"):
                                         text esc("Brought back by: %s" % ", ".join(entry["keywords"])) size 20 color "#9fb8d8"
                                     text esc("Turns %d to %d. %s" % (entry["start"] + 1, entry["end"],

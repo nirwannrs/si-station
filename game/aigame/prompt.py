@@ -1129,7 +1129,8 @@ def parse_recall(text, state):
 def journal_prompt(card, state, turns, prompts=None):
     """Asks for a journal entry about one scene: the turns given, oldest first. See journal.py."""
     scene = "\n\n".join("%s%sPlayer: %s\nNarrator: %s" % (_when(t), _present(card, t, "Present: %s"), t["player"], t["narration"]) for t in turns)
-    return fill(card, state, prompt_text(prompts, "write_journal")), [{"role": "user", "content": fill(card, state, "[Scene]\n%s" % scene)}]
+    earlier = "\n".join("%d. %s" % (entry["id"], journal.scene_line(card, entry)) for entry in state.get("journal", [])[-journal.LISTED:])
+    return fill(card, state, prompt_text(prompts, "write_journal")), [{"role": "user", "content": fill(card, state, "%s[Scene]\n%s" % ("[Earlier scenes]\n%s\n\n" % earlier if earlier else "", scene))}]
 
 
 # The scene director: decides, for each paragraph the narrator wrote, who is speaking and how they look.
