@@ -652,6 +652,56 @@ def _create_quest(card, state, a):
     return "New quest: %s. %s%s" % (title, about, _terms_of(card, state, quest))
 
 
+def _story_quest(card, state, a):
+    """A quest the story made that is still under way. The card's own quests stay as the card made them."""
+    quest, progress = _active_quest(card, state, a)
+    if not quest.get("generated"):
+        raise Rejected("%s is one of this game's own quests and stays as it is." % quest["title"])
+    return quest, progress
+
+
+def _change_quest(card, state, a):
+    """A quest the story made is no longer as it was written down: what was asked has changed, more
+    is known of it, it is due at another time. It stays the same quest, under the same id."""
+    quest, progress = _story_quest(card, state, a)
+    known = quests(card, state)
+    new = {}
+    if isinstance(a.get("title"), str) and a["title"].strip():
+        title = " ".join(a["title"].split())
+        if len(title) > 80 or any(_plain(other["title"]) == _plain(title) for oid, other in known.items() if oid != quest["id"]):
+            raise Rejected("%r cannot be its title: too long, or another quest is called that." % title)
+        new["title"] = title
+    if isinstance(a.get("description"), str) and a["description"].strip():
+        new["description"] = " ".join(a["description"].split())[:400]
+    elif "title" in new and quest["description"] == quest["title"]:
+        new["description"] = new["title"]           # it never had more than its title to say
+    if isinstance(a.get("due"), str):
+        new["due"] = " ".join(a["due"].split())[:80] or None        # an empty due: there is no longer a time it must be done by
+    if a.get("late") in ("fails", "stands"):
+        new["late"] = a["late"]
+    if isinstance(a.get("parent"), str):
+        new["parent"] = _find(known, a["parent"], "quest")[0] if a["parent"].strip() else None
+        if new["parent"] == quest["id"]:
+            raise Rejected("%s cannot be part of itself." % quest["title"])
+    new = dict((key, value) for key, value in new.items() if value != quest.get(key))
+    if not new:
+        raise Rejected("%s is already that." % quest["title"])
+    was = quest["title"]
+    quest.update(new)
+    quest["stages"][0]["description"] = quest["description"]
+    if "due" in new:
+        progress.pop("overdue", None)               # a new time to be done by is watched afresh
+    return "Quest changed: %s%s. %s%s" % (quest["title"], " (it was %s)" % was if "title" in new else "", quest["description"], _terms_of(card, state, quest))
+
+
+def _drop_quest(card, state, a):
+    """A quest the story made is called off, neither done nor failed: whoever asked takes it back,
+    or it was never really taken on."""
+    quest, progress = _story_quest(card, state, a)
+    progress["status"] = "dropped"
+    return "Quest dropped: %s." % quest["title"]
+
+
 def _terms_of(card, state, quest):
     parts = []
     if quest.get("parent"):
@@ -780,7 +830,7 @@ def settle_quests(card, state):
             continue
         # A quest that is part of another ends with it.
         over = state["quests"].get(quest.get("parent"), {}).get("status")
-        if over in ("done", "failed"):
+        if over in ("done", "failed", "dropped"):
             progress["status"] = "closed"
             results.append({"action": {"type": "quest_fail", "quest": quest_id}, "ok": True,
                             "message": "Quest closed: %s. It was part of %s, which is over." % (quest["title"], known[quest["parent"]]["title"])})
@@ -1038,6 +1088,8 @@ _HANDLERS = {
     "quest_advance": _quest_advance,
     "quest_fail": _quest_fail,
     "create_quest": _create_quest,
+    "change_quest": _change_quest,
+    "drop_quest": _drop_quest,
     "quest_overdue": _quest_overdue,
     "gain_xp": _gain_xp,
     "use_skill": _use_skill,

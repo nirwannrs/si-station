@@ -337,9 +337,18 @@ class StoryQuestsTest(unittest.TestCase):
         verdicts = json.dumps({"verdicts": [{"quest": "gen_check_the_portrait", "objective": "done", "verdict": "overdue"}, {"quest": "gen_nothing", "verdict": "failed"}], "start": []})
         self.assertEqual(prompt.parse_judge(verdicts, card, state), [{"type": "quest_overdue", "quest": "gen_check_the_portrait"}])
         self.assertEqual(prompt.parse_judge(verdicts, card), [])                                           # without the save it knows only the card's
+        # With a judge deciding progress the bookkeeper still knows the story's own quests, to change or drop one.
+        system, messages = prompt.bookkeeper_prompt(card, state, "I wait.", [], "Rain.", quests=False)
+        for action in ("create_quest", "change_quest", "drop_quest"):
+            self.assertIn('"type": "%s"' % action, system)
+        self.assertIn("[Quests taken on in the story]\n- Check the portrait (gen_check_the_portrait): At noon Mira asked Traveler to check the portrait.", messages[0]["content"])
+        self.assertNotIn("The Missing Courier (missing_courier)", messages[0]["content"])
+        self.assertNotIn("[Quests taken on in the story]", prompt.bookkeeper_prompt(card, state, "I wait.", [], "Rain.")[1][0]["content"])
         self.assertEqual(apply_actions(card, state, prompt.parse_judge(verdicts, card, state))[0]["message"], "Quest failed: Check the portrait. It was due sunrise tomorrow.")
+        self.assertNotIn("[Quests taken on in the story]", prompt.bookkeeper_prompt(card, state, "I wait.", [], "Rain.", quests=False)[1][0]["content"])
         card.data["rules"]["allow_generated_quests"] = False
         self.assertNotIn("create_quest", prompt.action_protocol(card))
+        self.assertNotIn("change_quest", prompt.action_protocol(card))
 
 
 class RecordedOnceTest(unittest.TestCase):

@@ -316,6 +316,36 @@ class EngineTest(unittest.TestCase):
         self.card.data["rules"]["allow_generated_quests"] = False
         self.rejected(type="create_quest", title="Another")
 
+    def test_a_quest_the_story_made_can_be_changed_or_dropped(self):
+        quest, progress = lambda: self.state["generated_quests"]["gen_fetch_water"], lambda: self.state["quests"]["gen_fetch_water"]
+        self.ok(type="create_quest", title="Fetch water", description="Mira asked for a pail from the well.", due="Day 1, 06:00", late="stands")
+        self.ok(type="create_quest", title="Find a pail", parent="gen_fetch_water")
+        self.state["header"] = "[ 07:00 | Day 1 | Common Room ]"
+        apply_actions(self.card, self.state, [])
+        self.assertTrue(progress()["overdue"])
+        # Only what is given changes, and it stays the same quest. A new time to be done by is watched afresh.
+        changed = self.ok(type="change_quest", quest="Fetch water", title="Fetch water for the horses", due="Day 2, 06:00", late="fails")
+        self.assertEqual(changed, "Quest changed: Fetch water for the horses (it was Fetch water). Mira asked for a pail from the well. (due Day 2, 06:00, or it fails)")
+        self.assertEqual((quest()["id"], quest()["description"], progress()), ("gen_fetch_water", "Mira asked for a pail from the well.", {"status": "active", "stage": 0, "met": []}))
+        self.ok(type="change_quest", quest="gen_fetch_water", description="Mira asked for two pails, for the horses.")
+        self.assertEqual(quest()["stages"][0]["description"], "Mira asked for two pails, for the horses.")
+        self.ok(type="change_quest", quest="gen_fetch_water", due="")                                 # no longer due by any time
+        self.assertEqual(quest()["due"], None)
+        self.ok(type="change_quest", quest="gen_find_a_pail", title="Borrow a pail")                 # one with only a title to say keeps to it
+        self.assertEqual(self.state["generated_quests"]["gen_find_a_pail"]["stages"][0]["description"], "Borrow a pail")
+        self.rejected(type="change_quest", quest="gen_fetch_water", due="")                           # nothing to change
+        self.rejected(type="change_quest", quest="gen_fetch_water", title="Borrow a pail")            # another quest is called that
+        self.rejected(type="change_quest", quest="gen_fetch_water", parent="gen_fetch_water")
+        self.rejected(type="change_quest", quest="gen_fetch_water", parent="no such quest")
+        self.rejected(type="change_quest", quest="missing_courier", title="Something else")           # the card's own
+        self.rejected(type="drop_quest", quest="missing_courier")
+        # Called off, it is neither done nor failed, and what was part of it ends with it.
+        dropped = apply_actions(self.card, self.state, [{"type": "drop_quest", "quest": "gen_fetch_water"}])
+        self.assertEqual([r["message"] for r in dropped], ["Quest dropped: Fetch water for the horses.", "Quest closed: Borrow a pail. It was part of Fetch water for the horses, which is over."])
+        self.assertEqual(progress()["status"], "dropped")
+        self.rejected(type="drop_quest", quest="gen_fetch_water")                                     # it is over
+        self.rejected(type="change_quest", quest="gen_fetch_water", title="Again")
+
     def test_what_the_player_does_with_something_the_game_does_not_have_is_left_to_the_story(self):
         """The helper that reads the player's message can only answer in game actions. When what
         it names is not there to act on, the engine rules on nothing and the story decides."""

@@ -137,7 +137,8 @@ def new_game(card, persona=None):
         "card_id": card.id,
         "turn": 0,
         "actors": actors,
-        # quest id -> {"status": "active" | "done" | "failed", "stage": index into the quest's stages}
+        # quest id -> {"status": "active" | "done" | "failed", "stage": index into the quest's stages}.
+        # A quest the story made can also end "closed" (what it was part of is over) or "dropped" (called off).
         "quests": dict((q["id"], {"status": "active", "stage": 0}) for q in card.data.get("quests", []) if q.get("auto_start")),
         # shop id -> {item id -> qty left, or None for unlimited}
         "shops": dict((s["id"], dict((e["item"], e.get("qty")) for e in s.get("stock", []))) for s in card.data.get("shops", [])),

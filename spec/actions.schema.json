@@ -242,6 +242,31 @@
             }
           },
           {
+            "description": "Narrator only. Changes a quest the story made (its id starts with gen_) that is still active; the card's own quests cannot be changed. Give only what changes. An empty due removes the time it is due by, and an empty parent makes it stand alone. A new due is watched afresh: an overdue mark is lifted.",
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "change_quest" },
+              "quest": { "$ref": "#/$defs/id" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "parent": { "type": "string" },
+              "due": { "type": "string" },
+              "late": { "enum": ["fails", "stands"] }
+            }
+          },
+          {
+            "description": "Narrator only. Calls off a quest the story made (its id starts with gen_) that is still active: it ends as dropped, neither done nor failed. Any quest that is part of it is closed with it.",
+            "type": "object",
+            "required": ["type", "quest"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "drop_quest" },
+              "quest": { "$ref": "#/$defs/id" }
+            }
+          },
+          {
             "description": "Narrator only. The time a quest was due by has passed: it fails or is marked overdue, as it was set up. Only for a quest that has a due time.",
             "type": "object",
             "required": ["type", "quest"],

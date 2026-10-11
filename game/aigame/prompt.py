@@ -96,6 +96,8 @@ NARRATOR_ACTIONS = (
     ("quests", '{"type": "quest_fail", "quest": QUEST_ID}'),
     ("quests", '{"type": "quest_overdue", "quest": QUEST_ID}  the time a quest was due by has passed and it is not done'),
     ("new_quests", '{"type": "create_quest", "title": "...", "description": "...", "parent": QUEST_ID, "due": "...", "late": "fails" or "stands"}  {{user}} has taken something on that is not among the quests: a favour asked, a promise made, an errand. description says who asked, what for and when it was agreed, enough to pick it up again much later. parent is the quest it is part of, if any; it ends when that quest does. due is when it must be done by, with the day and hour where the story gives them, and late says whether missing that fails it or leaves it standing, marked late. Leave out what does not apply'),
+    ("new_quests", '{"type": "change_quest", "quest": QUEST_ID, "title": "...", "description": "...", "parent": QUEST_ID, "due": "...", "late": "fails" or "stands"}  a quest taken on in the story (its id starts with gen_) is no longer as it was written down: what was asked has changed, more is now known of it, or it is due at another time. Give only what changes; an empty due means there is no longer a time it must be done by. It stays the same quest, so never for one that is finished or has gone wrong'),
+    ("new_quests", '{"type": "drop_quest", "quest": QUEST_ID}  a quest taken on in the story (its id starts with gen_) is called off, neither done nor failed: whoever asked takes it back, {{user}} is let off it, or it was never really agreed'),
 )
 
 TRACKED = (("battle", "fights"), ("states", "the state each character is in"), ("inventory", "inventory"), ("equipment", "equipment"), ("money", "money"), ("stats", "stats"),
@@ -219,8 +221,11 @@ def bookkeeper_prompt(card, state, player_text, results, narration, quests=True,
         lately += [r["message"] for r in turn.get("results", []) if r.get("ok") is True and r["message"] not in lately]
     recorded = ("[Recorded in the last turns]\n%s\nAll of this is in the game state already. Where the new text only returns to one of these, nothing new has happened: record nothing for it.\n\n" % "\n".join(
         "- " + line for line in lately[-RECORD_LINES:])) if lately else ""
+    ## With a quest judge the bookkeeper is still the one to change or drop a quest the story made,
+    ## and not to make one twice, so it is shown those and nothing of the card's.
+    told = describe_quests(card, state) if quests else describe_story_quests(card, state) if uses(card, "new_quests") else ""
     user = "%s\n\n%s%s[Player's message]\n%s\n%s\n[Narrator's new text]\n%s" % (
-        describe_state(card, state, focus="%s\n%s" % (player_text, narration)), describe_quests(card, state) + "\n\n" if quests and describe_quests(card, state) else "",
+        describe_state(card, state, focus="%s\n%s" % (player_text, narration)), told + "\n\n" if told else "",
         rewards + times + recorded + ("[Just before, already recorded; for context only]\n%s\n\n" % earlier if earlier else ""), player_text, already, narration)
     return system, [{"role": "user", "content": fill(card, state, user)}]
 
@@ -808,6 +813,16 @@ def describe_quests(card, state, detail="narrator"):
     if available and detail == "narrator":
         lines += ["[Quests that can begin now]"] + available
     return "\n".join(lines)
+
+
+def describe_story_quests(card, state):
+    """The quests the story itself made that are under way, and nothing about how far they have got."""
+    lines = []
+    for quest in state.get("generated_quests", {}).values():
+        progress = state["quests"].get(quest["id"])
+        if progress is not None and progress["status"] == "active":
+            lines.append("- %s: %s%s" % (_named(quest, "title"), quest["description"], _task_terms(card, state, quest, progress)))
+    return "[Quests taken on in the story]\n%s\nWhether one of these is finished, failed or late is decided elsewhere: record nothing for that." % "\n".join(lines) if lines else ""
 
 
 def arrivals(card, state, player_text):
