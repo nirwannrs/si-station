@@ -214,9 +214,11 @@ init python:
 
             played = turn('"Can anyone hear me?" *I wave an arm*', **{
                 CLERK: actions({"type": "equip", "item": "gen_wool_scarf"}),
+                BOOKS: actions({"type": "change_quest", "quest": "gen_mind_the_fire", "due": "Day 2, 06:00 AM"}),
                 STORY: "[ 08:00 PM | Day 1 | Common Room ]\n\nMira looks up.",
                 CLOCK: json.dumps({"line": "[ 09:44 PM | Day 1 | Common Room ]", "player_at": None})})
             assert me["equipment"].get("accessory") == "gen_wool_scarf"
+            assert game_state["generated_quests"]["gen_mind_the_fire"]["due"] == "Day 2, 06:00 AM", "the story's own quest was not changed: %s" % played["results"]
             assert played.get("heard") and "*I wave an arm*" in played["heard"] and not re.search(r"[aeiou]", played["heard"].split("*")[0].lower()), played.get("heard")
             assert CLOCK in selftest.asked and "09:44" in game_state["header"], "the clock ran backwards and was not put right: %s" % game_state.get("header")
             me["states"].clear()
@@ -228,8 +230,10 @@ init python:
                 entry["start"], entry["end"] = 0, 1
             kept = game_state.get("summarized", 0)
             game_state["summarized"] = len(game_state["history"])
-            turn("I think back.", **{MEMORY: json.dumps({"scenes": [first["id"] + 2]}), STORY: "[ 09:50 PM | Day 1 | Common Room ]\n\nThe fire settles."})
+            turn("I think back.", **{MEMORY: json.dumps({"scenes": [first["id"] + 2]}), BOOKS: actions({"type": "drop_quest", "quest": "gen_mind_the_fire"}),
+                                     STORY: "[ 09:50 PM | Day 1 | Common Room ]\n\nThe fire settles."})
             assert MEMORY in selftest.asked, "the memory helper was not asked"
+            assert game_state["quests"]["gen_mind_the_fire"]["status"] == "dropped", "the story's own quest was not called off"
             game_state["summarized"] = kept
             del game_state["journal"][1:]
             journal_open_editor(first["id"])

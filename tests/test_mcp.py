@@ -103,6 +103,7 @@ class SessionTest(unittest.TestCase):
         result = self.send("tools/call", {"name": tool, "arguments": args})["result"]
         return result["isError"], json.loads(result["content"][0]["text"])
 
+    @unittest.skipIf(os.name == "nt", "the server only replaces itself where the connection survives it")
     def test_it_restarts_itself_when_its_code_changes(self):
         """A server that keeps running old code calls good cards broken. It must pick up new code
         without the client reconnecting or losing a request."""
